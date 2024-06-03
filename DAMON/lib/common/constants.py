@@ -1,0 +1,8 @@
+VERSION = "1.5"
+TITLE = f"Blackjack AI - v{VERSION}"
+SIZE = "1200x800"
+RESOLUTION = "1920x1080"
+
+# PLAYER_REGIONS = {
+#     "1920x1080": [],
+# }
