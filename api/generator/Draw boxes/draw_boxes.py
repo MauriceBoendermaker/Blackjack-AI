@@ -77,8 +77,8 @@ player_regions = {
 }
 
 # Initialize Roboflow
-api_key = "WBy7jG6AiiqjzifOfiNH"  # Replace with your actual API key
-project_id = "dey022"  # Replace with your actual project ID
+api_key = "WBy7jG6AiiqjzifOfiNH"
+project_id = "dey022"
 rf = Roboflow(api_key=api_key)
 project = rf.workspace().project(project_id)
 model = project.version(1).model
