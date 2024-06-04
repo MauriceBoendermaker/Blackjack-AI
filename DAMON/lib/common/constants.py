@@ -1,8 +1,26 @@
 VERSION = "1.5"
 TITLE = f"Blackjack AI - v{VERSION}"
 SIZE = "1200x800"
-RESOLUTION = "1920x1080"
+RESOLUTION = "2560x1440"
 
-# PLAYER_REGIONS = {
-#     "1920x1080": [],
-# }
+BASE_RESOLUTION = (2560, 1440)
+BASE_PLAYER_REGIONS = [
+    [[476, 1096], [604, 1228], [1072, 948], [1076, 832], [476, 1096]],
+    [[604, 1228], [820, 1332], [1216, 944], [1072, 948], [604, 1228]],
+    [[820, 1332], [1112, 1392], [1308, 944], [1216, 944], [820, 1332]],
+    [[1112, 1392], [1424, 1392], [1372, 944], [1308, 944], [1112, 1392]],
+    [[1424, 1392], [1716, 1340], [1456, 940], [1372, 944], [1424, 1392]],
+    [[1716, 1336], [1940, 1236], [1572, 940], [1456, 940], [1716, 1336]],
+    [[1940, 1236], [2072, 1096], [1572, 840], [1572, 940], [1940, 1236]]
+]
+
+ROBOFLOW_API_KEY = "WBy7jG6AiiqjzifOfiNH"  # Replace with your actual API key
+ROBOFLOW_PROJECT_ID = "dey022"  # Replace with your actual project ID
+ROBOFLOW_MODEL_VERSION = 1
+PREDICTION_CONFIDENCE = 50
+PREDICTION_OVERLAP = 100
+
+# File paths
+INPUT_SCREENSHOT_PATH = "INPUT_current_screen.jpg"
+OUTPUT_PREDICTION_PATH = "OUTPUT_prediction.jpg"
+OUTPUT_FINAL_PREDICTION_PATH = "OUTPUT_final_prediction_with_players.jpg"
