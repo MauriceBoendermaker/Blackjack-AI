@@ -1,7 +1,7 @@
 import tkinter as tk
 
-from lib.common import constants
-import lib.player_boxes.generator as pbox_generator
+from ..common import constants
+from ..player_boxes import generator as pbox_generator
 
 
 class GraphicalUserInterface(tk.Tk):
@@ -32,28 +32,3 @@ class GraphicalUserInterface(tk.Tk):
         )
 
         self.canvas.create_window(300, 550, window=self.pbox_gen_button)
-
-        # self.start_button = tk.Button(
-        #     self, text="Start Game", command=self.test)
-        # self.canvas.create_window(300, 550, window=self.start_button)
-
-        # dealer_value_label = tk.Label(canvas, text="Dealer has: ")
-        # dealer_value_label.place(relx=1.0, rely=0.0, x=-50, y=0, anchor='ne')  # Adjusted for top-right with padding
-
-        # round_label = tk.Label(window, text=f"Round: {round_count}")
-        # round_label.place(x=10, y=5)
-
-        # reset_button = tk.Button(window, text="Reset Round", command=reset_for_new_round)
-        # reset_button.pack()
-        # reset_button.place(x=100, y=5)
-
-        # start_y = 750  # Start position from the bottom of an 800px tall window
-        # label_height = 20  # Estimated height of each label
-        # spacing = 5  # Spacing between labels
-
-        # for card_value in card_values:  # No need to reverse since we're starting from the bottom now
-        #     text = f"{card_value}: 0x"
-        #     label = tk.Label(canvas, text=text, anchor='e')
-        #     label.place(relx=0.95, y=start_y, anchor="se")  # Adjust relx and anchor if needed
-        #     card_counter_labels.append(label)
-        #     start_y -= (label_height + spacing)  # Move up for the next label
