@@ -1,6 +1,7 @@
 import tkinter as tk
 
-import lib.common.constants as constants
+from lib.common import constants
+import lib.player_boxes.generator as pbox_generator
 
 
 class GraphicalUserInterface(tk.Tk):
@@ -12,6 +13,7 @@ class GraphicalUserInterface(tk.Tk):
         super().__init__()
         self.title(constants.TITLE)
         self.geometry(constants.SIZE)
+        self.pbox_generator = pbox_generator.PlayerBoxGenerator()
 
         self.canvas = tk.Canvas()
         self.draw_canvas()
@@ -25,9 +27,15 @@ class GraphicalUserInterface(tk.Tk):
         self.canvas.create_text(125, 425, text="Player", fill="white")
 
     def add_buttons(self):
-        self.start_button = tk.Button(
-            self, text="Start Game", command=self.test)
-        self.canvas.create_window(300, 550, window=self.start_button)
+        self.pbox_gen_button = tk.Button(
+            self, text="Generate Player Boxes", command=self.pbox_generator.generate
+        )
+
+        self.canvas.create_window(300, 550, window=self.pbox_gen_button)
+
+        # self.start_button = tk.Button(
+        #     self, text="Start Game", command=self.test)
+        # self.canvas.create_window(300, 550, window=self.start_button)
 
         # dealer_value_label = tk.Label(canvas, text="Dealer has: ")
         # dealer_value_label.place(relx=1.0, rely=0.0, x=-50, y=0, anchor='ne')  # Adjusted for top-right with padding
