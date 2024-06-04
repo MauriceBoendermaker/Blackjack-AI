@@ -2,6 +2,7 @@ import screeninfo
 from mss import mss
 from PIL import Image
 
+
 # import lib.common.constants as constants
 
 
@@ -32,5 +33,5 @@ class PlayerBoxGenerator:
 
         # TODO: Show image in tkinter (GUI)
         img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
-        img.save("INPUT_current_screen.jpg")
+        img.save("OUTPUT_current_screen.jpg")
         return img
