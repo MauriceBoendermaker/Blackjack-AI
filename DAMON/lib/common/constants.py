@@ -30,8 +30,8 @@ PREDICTION_CONFIDENCE_DEALER = 55
 PREDICTION_OVERLAP_DEALER = 45
 
 # File paths
-CARD_FOLDER_PATH = "cards"
-DEFAULT_CARD_IMAGE_PATH = "cards/red card.jpg"
+CARD_FOLDER_PATH = "../api/cards"
+DEFAULT_CARD_IMAGE_PATH = "../api/cards/red card.jpg"
 INPUT_SCREENSHOT_PATH = "INPUT_current_screen.jpg"
 OUTPUT_PREDICTION_PATH = "OUTPUT_prediction.jpg"
 OUTPUT_FINAL_PREDICTION_PATH = "OUTPUT_final_prediction_with_players.jpg"
