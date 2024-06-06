@@ -1,8 +1,13 @@
+import os
+
 import lib.common.constants as constants
 from lib.interfaces.gui import GraphicalUserInterface
 
 
 # TODO: Add logging to everything instead of ugly prints
+
+
+# print("Current working directory:", os.getcwd())
 
 
 def init_gui():
