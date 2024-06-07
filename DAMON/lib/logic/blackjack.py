@@ -255,14 +255,16 @@ class BlackjackLogic:
             card_display_y = start_y
 
             for j, card in enumerate(cards):
-                if card != '-':
-                    photo_img = self.get_card_image(card)
-                    card_label = tk.Label(self.gui.canvas, image=photo_img)
-                    card_label.image = photo_img
-                    card_label.place(x=start_x, y=card_display_y)
-                    card_label.bind("<Button-1>", lambda e, pi=i, ci=j: self.on_card_click(pi, ci))
-                    self.player_cards_labels.append(card_label)
-                    card_display_y += constants.CARD_HEIGHT + 10
+                if card == '-':
+                    card = "default"
+
+                photo_img = self.get_card_image(card)
+                card_label = tk.Label(self.gui.canvas, image=photo_img)
+                card_label.image = photo_img
+                card_label.place(x=start_x, y=card_display_y)
+                card_label.bind("<Button-1>", lambda e, pi=i, ci=j: self.on_card_click(pi, ci))
+                self.player_cards_labels.append(card_label)
+                card_display_y += constants.CARD_HEIGHT + 10
 
             start_y = 10
             self.create_label(f"Player {player_number}", start_x + column_width // 2,
@@ -295,27 +297,33 @@ class BlackjackLogic:
             except FileNotFoundError:
                 print(f"Image file not found: {card_image_path}")
 
+        # Add the default card image as an option
+        default_img = Image.open(constants.DEFAULT_CARD_IMAGE_PATH).resize((60, 90))
+        default_imgtk = ImageTk.PhotoImage(image=default_img)
+        default_button = tk.Button(selection_window, image=default_imgtk,
+                                   command=lambda: self.replace_card(player_index, card_index, "-"))
+        default_button.image = default_imgtk  # Keep a reference to avoid garbage collection
+        default_button.grid(row=len(available_cards) // 10, column=0)
+
     def get_all_available_cards(self):
         suits = ['Spades', 'Hearts', 'Diamonds', 'Clubs']
         values = constants.VALUE_MAPPING.keys()
         return [f"{value} of {suit}" for suit in suits for value in values]
 
     def replace_card(self, player_index, card_index, new_card):
-        self.player_cards[player_index]['cards'][card_index] = new_card
-        self.player_cards[player_index]['confidences'][
-            card_index] = 1.0  # Assuming full confidence for manual replacement
-        self.manually_replaced_cards[player_index].add(card_index)  # Mark card index as manually replaced
-        self.locked_cards[player_index].add(card_index)  # Also lock the card index
+        if new_card == "-":
+            self.player_cards[player_index]['cards'][card_index] = "-"
+            self.player_cards[player_index]['confidences'][card_index] = 0.0
+            self.locked_cards[player_index].discard(card_index)
+            self.manually_replaced_cards[player_index].discard(card_index)
+        else:
+            self.player_cards[player_index]['cards'][card_index] = new_card
+            self.player_cards[player_index]['confidences'][
+                card_index] = 1.0  # Assuming full confidence for manual replacement
+            self.manually_replaced_cards[player_index].add(card_index)  # Mark card index as manually replaced
+            self.locked_cards[player_index].add(card_index)  # Also lock the card index
+
         print(f"Manually replaced card {card_index} for player {player_index} with {new_card}")
-
-        if card_index == 0 and self.detection_states[player_index] == BlackjackLogic.DetectionState.FIRST_CARD_DETECTED:
-            self.detection_states[player_index] = BlackjackLogic.DetectionState.WAITING_FOR_SECOND_CARD
-            print(f"Transitioned to WAITING_FOR_SECOND_CARD for player {player_index}")
-
-        elif card_index == 1 and self.detection_states[
-            player_index] == BlackjackLogic.DetectionState.WAITING_FOR_SECOND_CARD:
-            self.detection_states[player_index] = BlackjackLogic.DetectionState.SECOND_CARD_DETECTED
-            print(f"Transitioned to SECOND_CARD_DETECTED for player {player_index}")
 
         # Update GUI
         self.update_gui()
@@ -347,7 +355,11 @@ class BlackjackLogic:
             print(f"Image file not found: {card_image_path}")
 
     def get_card_image(self, card):
-        card_image_path = self.utils.generate_card_image_path(card)
+        if card == "default":
+            card_image_path = constants.DEFAULT_CARD_IMAGE_PATH
+        else:
+            card_image_path = self.utils.generate_card_image_path(card)
+
         if not os.path.exists(card_image_path):
             print(f"Card image not found: {card_image_path}. Using default image.")
             card_image_path = constants.DEFAULT_CARD_IMAGE_PATH
