@@ -52,6 +52,16 @@ ACTION_MAPPING = {  # No need to map D/H, D/S, P/H and R/H
     "P": "Split",
 }
 
+ACTION_COLORS = {
+    "H": "blue",
+    "S": "red",
+    "D/H": "green",
+    "D/S": "green",
+    "P": "skyblue",
+    "R/H": "purple",
+    "P/H": "orange"
+}
+
 # Misc
 BASE_BET = 10
 DECK_COUNT = 8
