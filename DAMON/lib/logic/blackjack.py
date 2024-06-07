@@ -3,6 +3,7 @@ import time
 from collections import defaultdict
 import os
 import tempfile
+from tkinter import font
 import tkinter as tk
 
 import cv2
@@ -35,11 +36,12 @@ class BlackjackLogic:
         self.deck_count = constants.DECK_COUNT
         self.detected_card = {}
         self.blackjack_strategy = {}
+        self.load_blackjack_strategy()
         self.cards_info = []
         self.recommendations = []
         self.players_cards_data = []
         self.player_cards_labels = []
-        self.players_decision_labels = []
+        self.players_decision_labels = defaultdict(list)
         self.first_card_detected = set()
         self.second_card_detected = set()
         self.players_received_first_card = set()
@@ -65,7 +67,7 @@ class BlackjackLogic:
     def initialize_screenshot(self):
         self.captured_screenshot = self.monitor_utils.capture_screen()
 
-    def populate_blackjack_strategy(self):
+    def load_blackjack_strategy(self):
         with open(constants.CSV_FILE_PATH, newline='') as csvfile:
             reader = csv.reader(csvfile, delimiter=';')
             for row in reader:
@@ -156,13 +158,6 @@ class BlackjackLogic:
             self.player_cards[player_index]['confidences'][replace_index] = detected_card['confidence']
             self.card_handler.print_all_cards(self.player_cards, self.card_utils.card_counters)
 
-    def update_gui(self):
-        self.players_cards_data.clear()
-        for player_index, player_data in sorted(self.player_cards.items(), key=lambda x: x[0]):
-            self.players_cards_data.append({'player_index': player_index, 'cards': player_data['cards']})
-        self.update_player_cards_display(self.players_cards_data, self.dealer_up_card, self.card_utils.true_count,
-                                         constants.BASE_BET)
-
     def blackjack_decision(self, player_cards, dealer_up_card, true_count, base_bet):
         dealer_value = self.card_utils.get_dealer_card_value(dealer_up_card) if dealer_up_card != "Unknown" else "0"
         hand_value = self.card_utils.calculate_hand_value(player_cards)
@@ -181,8 +176,21 @@ class BlackjackLogic:
 
             action = self.blackjack_strategy.get(action_key, "?")
 
-        self.recommendations.append(constants.ACTION_MAPPING.get(action, "Hit" if action == "?" else action))
-        return self.recommendations
+        colored_action = self.get_colored_action(action)
+        self.recommendations.append(colored_action[0])
+        return [colored_action]
+
+    def get_colored_action(self, action):
+        if action in constants.ACTION_MAPPING:
+            action_text = constants.ACTION_MAPPING[action]
+        else:
+            action_text = action
+
+        color = self.get_action_color(action)
+        return action_text, color
+
+    def get_action_color(self, action):
+        return constants.ACTION_COLORS.get(action, "black")
 
     def process_player_decisions_and_print_info(self, initial_cards_received, dealer_up_card):
         dealer_up_card = dealer_up_card[0] if dealer_up_card else "Unknown"
@@ -241,7 +249,7 @@ class BlackjackLogic:
     def update_player_cards_display(self, player_data_list, dealer_up_card, true_count, base_bet):
         self.clear_player_cards()
 
-        start_y = 10
+        start_y = 50  # Increase the starting y position for more padding
         total_width = 7 * (constants.CARD_WIDTH + constants.CARD_SPACING) + 8
         column_width = (total_width - 8) // 7
 
@@ -259,21 +267,40 @@ class BlackjackLogic:
                     card = "default"
 
                 photo_img = self.get_card_image(card)
-                card_label = tk.Label(self.gui.canvas, image=photo_img)
+                card_label = tk.Label(self.gui.canvas, image=photo_img, bg="white")
                 card_label.image = photo_img
-                card_label.place(x=start_x, y=card_display_y)
+                card_label.place(x=start_x, y=card_display_y)  # Remove padx and pady
                 card_label.bind("<Button-1>", lambda e, pi=i, ci=j: self.on_card_click(pi, ci))
                 self.player_cards_labels.append(card_label)
-                card_display_y += constants.CARD_HEIGHT + 10
+                card_display_y += constants.CARD_HEIGHT + 20  # Increase spacing between cards
 
-            start_y = 10
+            start_y = 50  # Reset the starting y position for the next player
             self.create_label(f"Player {player_number}", start_x + column_width // 2,
-                              self.gui.winfo_height() - 10, anchor="s")
+                              self.gui.winfo_height() - 20, anchor="s")
 
-            decision = self.blackjack_decision(cards, dealer_up_card, true_count, base_bet)[0] if player_data else "-"
-            decision_label = self.create_label(f"Decision: {decision}", start_x + column_width // 2,
-                                               card_display_y + 20, anchor="n")
-            self.players_decision_labels.append(decision_label)
+            decision = self.blackjack_decision(cards, dealer_up_card, true_count, base_bet)[0] if player_data else (
+                "-", "black")
+            self.create_colored_labels(f"Decision: ", decision[0], decision[1], start_x + column_width // 2,
+                                       card_display_y + 5, "n")
+
+    def create_colored_labels(self, prefix, text, color, x, y, anchor="n"):
+        player_number = int(
+            x // (constants.CARD_WIDTH + constants.CARD_SPACING))  # Determine player number based on x position
+
+        # Clear previous labels for the specific player
+        if player_number in self.players_decision_labels:
+            for label in self.players_decision_labels[player_number]:
+                label.destroy()
+        self.players_decision_labels[player_number] = []
+
+        # Define a larger font
+        large_font = font.Font(family="Helvetica", size=14, weight="bold")  # Increase font size
+
+        # Create a single label to hold both the prefix and the decision text
+        combined_text = f"{prefix} {text}"
+        label_combined = tk.Label(self.gui.canvas, text=combined_text, fg=color, bg="white", font=large_font)
+        label_combined.place(x=x, y=y, anchor=anchor)  # Remove padx and pady
+        self.players_decision_labels[player_number].append(label_combined)
 
     def on_card_click(self, player_index, card_index):
         self.open_card_selection_window(player_index, card_index)
@@ -372,6 +399,13 @@ class BlackjackLogic:
         label.place(x=x, y=y, anchor=anchor)
         return label
 
+    def update_gui(self):
+        self.players_cards_data.clear()
+        for player_index, player_data in sorted(self.player_cards.items(), key=lambda x: x[0]):
+            self.players_cards_data.append({'player_index': player_index, 'cards': player_data['cards']})
+        self.update_player_cards_display(self.players_cards_data, self.dealer_up_card, self.card_utils.true_count,
+                                         constants.BASE_BET)
+
     def reset_for_new_round(self):
         self.player_cards.clear()
         self.players_cards_data.clear()
@@ -400,5 +434,12 @@ class BlackjackLogic:
 
     def clear_player_cards(self):
         for label in self.player_cards_labels:
-            label.destroy()
+            if isinstance(label, tk.Label):  # Ensure it's a Label before destroying
+                label.destroy()
         self.player_cards_labels.clear()
+
+        for player_number, label_list in self.players_decision_labels.items():
+            for label in label_list:
+                if isinstance(label, tk.Label):  # Ensure it's a Label before destroying
+                    label.destroy()
+        self.players_decision_labels.clear()

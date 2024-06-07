@@ -19,51 +19,51 @@ class GraphicalUserInterface(tk.Tk):
         self.geometry(constants.SIZE)
         self.resizable(False, False)  # Prevent window resizing
 
+        self.style = ttk.Style()
+        self.style.configure('TFrame', background='#f0f0f0')
+        self.style.configure('TLabel', background='#f0f0f0', padding=20)  # Increase padding
+        self.style.configure('TButton', padding=20)  # Increase padding
+
         self.reset_button = None
         self.background_processor = None
+
         self.pbox_generator = pbox_generator.PlayerBoxGenerator(self)
         self.monitor_utils = MonitorUtils()  # Initialize MonitorUtils instance
 
         self.monitor_var = tk.StringVar()
-        self.monitor_selection_frame = tk.Frame(self)
-        self.monitor_selection_frame.pack()
-        self.monitor_label = tk.Label(self.monitor_selection_frame, text="Select Monitor:")
+        self.monitor_selection_frame = ttk.Frame(self)
+        self.monitor_selection_frame.pack(padx=30, pady=20)  # Increase padding
+        self.monitor_label = ttk.Label(self.monitor_selection_frame, text="Select Monitor:")
         self.monitor_label.pack(side=tk.LEFT)
         self.monitor_combo = ttk.Combobox(self.monitor_selection_frame, textvariable=self.monitor_var, state="readonly")
         self.monitor_combo.pack(side=tk.LEFT)
 
-        self.resolution_label = tk.Label(self.monitor_selection_frame, text="Resolution: ")
+        self.resolution_label = ttk.Label(self.monitor_selection_frame, text="Resolution: ")
         self.resolution_label.pack(side=tk.LEFT)
         self.resolution_var = tk.StringVar()
-        self.resolution_display = tk.Label(self.monitor_selection_frame, textvariable=self.resolution_var)
+        self.resolution_display = ttk.Label(self.monitor_selection_frame, textvariable=self.resolution_var)
         self.resolution_display.pack(side=tk.LEFT)
 
-        self.confirm_button = tk.Button(self.monitor_selection_frame,
-                                        text="Confirm",
-                                        command=self.confirm_monitor_selection)
-        self.confirm_button.pack(side=tk.LEFT)
+        self.confirm_button = ttk.Button(self.monitor_selection_frame, text="Confirm",
+                                         command=self.confirm_monitor_selection)
+        self.confirm_button.pack(side=tk.LEFT, padx=10)
 
-        self.pbox_gen_button = tk.Button(self,
-                                         text="Generate Player Boxes",
-                                         command=self.pbox_generator.generate,
-                                         state=tk.DISABLED)
-        self.pbox_gen_button.pack()
+        self.pbox_gen_button = ttk.Button(self, text="Generate Player Boxes", command=self.pbox_generator.generate,
+                                          state=tk.DISABLED)
+        self.pbox_gen_button.pack(padx=30, pady=20)  # Increase padding
 
-        self.start_button = tk.Button(self, text="Start", command=self.start)
-        self.start_button.pack(pady=20)
+        self.start_button = ttk.Button(self, text="Start", command=self.start)
+        self.start_button.pack(pady=30)  # Increase padding
 
-        self.round_label = tk.Label(self, text=f"Round: 000")
+        self.round_label = ttk.Label(self, text=f"Round: 000", font=("Helvetica", 14))
         self.round_label.place(x=10, y=5)
 
-        self.dealer_value_label = tk.Label(self, text="Dealer has: ")
-        self.dealer_value_label.place(relx=1.0,
-                                      rely=0.0,
-                                      x=-50,
-                                      y=0,
+        self.dealer_value_label = ttk.Label(self, text="Dealer has: ", font=("Helvetica", 14))
+        self.dealer_value_label.place(relx=1.0, rely=0.0, x=-50, y=0,
                                       anchor='ne')  # Adjusted for top-right with padding
 
-        self.canvas = tk.Canvas(self)
-        self.canvas.pack(fill=tk.BOTH, expand=True)
+        self.canvas = tk.Canvas(self, bg="#ffffff")
+        self.canvas.pack(fill=tk.BOTH, expand=True, padx=30, pady=20)  # Increase padding
 
         self.draw_canvas()
         self.populate_monitors()
@@ -79,7 +79,8 @@ class GraphicalUserInterface(tk.Tk):
             x2 = x1 + constants.CARD_WIDTH
             y2 = y1 + constants.CARD_HEIGHT
             self.canvas.create_rectangle(x1, y1, x2, y2, outline="black")
-            self.canvas.create_text((x1 + x2) // 2, y2 + 20, text=f"Player {i + 1}", fill="black")
+            self.canvas.create_text((x1 + x2) // 2, y2 + 30, text=f"Player {i + 1}",
+                                    fill="black")  # Adjust text positioning
 
     def populate_monitors(self):
         monitors = screeninfo.get_monitors()
