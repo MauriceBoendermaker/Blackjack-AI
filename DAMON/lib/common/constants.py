@@ -36,7 +36,7 @@ INPUT_SCREENSHOT_PATH = "INPUT_current_screen.jpg"
 OUTPUT_PREDICTION_PATH = "OUTPUT_prediction.jpg"
 OUTPUT_FINAL_PREDICTION_PATH = "OUTPUT_final_prediction_with_players.jpg"
 OUTPUT_DEBUG_IMAGE_PATH = "OUTPUT_dealer_area_current_view.jpg"
-CSV_FILE_PATH = "Blackjack cheat sheet table.csv"
+CSV_FILE_PATH = "lib/Blackjack cheat sheet table.csv"
 
 # Mapping
 CARD_VALUES = ["Ace", "10", "9", "8", "7", "6", "5", "4", "3", "2"]
