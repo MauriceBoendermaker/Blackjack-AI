@@ -72,8 +72,9 @@ class CardUtils:
     def print_player_cards(self, player_index, cards, recommendation):
         hand_value = self.calculate_hand_value(cards)
         cards_info = " // ".join([f"[{i + 1}] {card}" for i, card in enumerate(cards)])
+        recommendation_text = ", ".join([action[0] for action in recommendation])  # Extract the action text
         print(
-            f"P{player_index + 1}: {cards_info}. Card value is {hand_value}. Recommended action: {', '.join(recommendation)}.")
+            f"P{player_index + 1}: {cards_info}. Card value is {hand_value}. Recommended action: {recommendation_text}.")
 
     def get_hand_representation(self, cards):
         # Check for pairs of tens or face cards
