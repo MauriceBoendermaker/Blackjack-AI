@@ -41,18 +41,20 @@ class CardHandler:
             card_name = dealer_class_mapping.get(class_label, "Unknown")
             self.dealer_cards.append(card_name)
 
-        # update_dealer_card_display(dealer_cards)  # Update the GUI with the first dealer card
         return self.dealer_cards
 
     def print_all_cards(self, player_cards, card_value_counts):
+        self.cards_info.clear()  # Clear previous card info
         for player_index in sorted(player_cards):
             cards = player_cards[player_index]['cards']
             confidences = player_cards[player_index]['confidences']
 
+            card_info = []
             for i, (card, conf) in enumerate(zip(cards, confidences), start=1):
-                self.cards_info.append(f"[{i}] {card} (C: {conf * 100:.2f}%)")
+                card_info.append(f"[{i}] {card} (C: {conf * 100:.2f}%)")
 
-            print(f"P{player_index + 1}: {' // '.join(self.cards_info)}")
+            self.cards_info.append(f"P{player_index + 1}: {' // '.join(card_info)}")
+            print(f"P{player_index + 1}: {' // '.join(card_info)}")
 
         formatted_card_counts = [f"{value} => {count}x" for value, count in
                                  sorted(card_value_counts.items(), key=lambda item: item[0])]
@@ -60,7 +62,6 @@ class CardHandler:
         print(f"Card counts ({total_cards}):\n", "\n".join(formatted_card_counts))
 
     def add_or_update_player_card(self, detected_card, player_info, card_name):
-        # This assumes that 'cards' is a list of card names and 'confidences' is a list of confidence values.
         if "-" in player_info['cards']:
             replace_index = player_info['cards'].index("-")
             player_info['cards'][replace_index] = card_name
@@ -68,5 +69,7 @@ class CardHandler:
         else:
             player_info['cards'].append(card_name)
             player_info['confidences'].append(detected_card['confidence'])
-        # Ensure unique identification for counted cards, might need adjustment if spatial data is to be included
         self.card_utils.counted_cards_this_round.add(card_name)
+
+        # Print debug information to verify card updates
+        print(f"Player {replace_index} card updated: {player_info['cards']}")

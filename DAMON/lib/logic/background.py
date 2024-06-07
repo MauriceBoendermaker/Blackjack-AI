@@ -16,18 +16,19 @@ class BackgroundProcessor:
 
     def start(self):
         threading.Thread(target=self.background_processing, daemon=True).start()
+        self.gui.after(100, self.check_for_updates)  # Start checking for updates in the GUI thread
 
     def background_processing(self):
         while True:
             self.blackjack_logic.capture_screen_and_track_cards()
-            self.update_ui_callback()
+            self.update_queue.put("update")
 
     def check_for_updates(self):
-        if not self.update_queue.empty():
-            data = self.update_queue.get()
-            if 'dealer_card' in data:
-                self.blackjack_logic.update_dealer_card_display(data['dealer_card'])
-        self.gui.after(10, self.check_for_updates)
+        while not self.update_queue.empty():
+            data = self.update_queue.get_nowait()
+            if data == "update":
+                self.update_ui_callback()
+        self.gui.after(100, self.check_for_updates)
 
     def update_gui_from_queue(self):
         try:
@@ -39,7 +40,7 @@ class BackgroundProcessor:
                     elif 'players_cards' in data:
                         self.blackjack_logic.update_player_cards_display(data['players_cards'],
                                                                          self.blackjack_logic.dealer_up_card,
-                                                                         self.card_utils.true_count,
+                                                                         self.card_utils.calculate_true_count(),
                                                                          constants.BASE_BET)
         finally:
-            self.gui.after(10, self.update_gui_from_queue)
+            self.gui.after(100, self.update_gui_from_queue)

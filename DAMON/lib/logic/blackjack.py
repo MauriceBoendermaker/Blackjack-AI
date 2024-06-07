@@ -1,10 +1,11 @@
-from collections import defaultdict
-import os
-import cv2
 import csv
 import time
+from collections import defaultdict
+import os
 import tempfile
 import tkinter as tk
+
+import cv2
 from PIL import Image, ImageTk
 
 from ..common import constants
@@ -56,7 +57,7 @@ class BlackjackLogic:
     def initialize_screenshot(self):
         self.captured_screenshot = self.monitor_utils.capture_screen()
 
-    def populate_blackjack_strategy(self):  # Read the CSV file and populate the strategy dictionary
+    def populate_blackjack_strategy(self):
         with open(constants.CSV_FILE_PATH, newline='') as csvfile:
             reader = csv.reader(csvfile, delimiter=';')
             for row in reader:
@@ -65,7 +66,7 @@ class BlackjackLogic:
 
     def set_monitor(self, monitor):
         self.monitor_utils.set_monitor(monitor)
-        self.initialize_screenshot()  # Initialize screenshot after monitor is set
+        self.initialize_screenshot()
 
     def capture_screen_and_track_cards(self):
         current_resolution = self.monitor_utils.get_current_resolution()
@@ -73,72 +74,82 @@ class BlackjackLogic:
         self.player_regions = self.monitor_utils.scale_player_regions(constants.BASE_PLAYER_REGIONS, scale_x, scale_y)
 
         while True:
+            self.initialize_screenshot()
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
                 temp_file_path = temp_file.name
                 self.captured_screenshot.save(temp_file_path)
 
-            # Crop to dealer's area
-            dealer_area = self.captured_screenshot.crop(
-                (constants.DEALER_AREA_LEFT,
-                 constants.DEALER_AREA_UPPER,
-                 constants.DEALER_AREA_RIGHT,
-                 constants.DEALER_AREA_LOWER))
-
-            # Pass cropped image to dealer's model
-            dealer_cards = self.card_handler.capture_dealer_cards(dealer_area, self.model_dealer)
-            print(f"Dealer's cards: {dealer_cards}")
-
-            # Predict using object detection model
             predictions = self.model_players.predict(temp_file_path,
                                                      confidence=constants.PREDICTION_CONFIDENCE_PLAYERS,
                                                      overlap=constants.PREDICTION_OVERLAP_PLAYERS).json()['predictions']
 
             print(f"{len(predictions)} predictions")
 
-            # Process each prediction
-            for prediction in predictions:
-                x, y, class_label, confidence = prediction['x'], prediction['y'], prediction['class'], prediction[
-                    'confidence']
-                card_name = self.card_utils.get_card_name(class_label)
-
-                # self.card_utils.update_card_counter(card_name, 1)
-                self.card_utils.update_count(card_name)
-                self.card_handler.handle_card_detection(card_name)  # Update the card counter
-
-                for i, region in enumerate(self.player_regions):
-                    if region.contains_point([x, y]):
-                        detected_card = {'x': x, 'y': y, 'confidence': confidence, 'card_name': card_name}
-                        if not self.card_utils.is_duplicate_or_nearby_card(detected_card,
-                                                                           self.player_cards[i]['cards']):
-                            self.card_handler.add_or_update_player_card(detected_card, self.player_cards[i], card_name)
+            for player_index, region in enumerate(self.player_regions):
+                self.process_player_predictions(predictions, player_index, region)
 
             self.card_utils.calculate_true_count()
-            self.process_player_decisions_and_print_info(self.initial_cards_received, dealer_cards)
+            self.process_player_decisions_and_print_info(self.initial_cards_received, self.dealer_up_card)
 
-            # Delete temporary file
             os.unlink(temp_file_path)
 
-            if (time.time() - self.detection_start_time) > self.minimum_detection_duration:
-                if self.second_card_detected and self.players_received_first_card.issubset(self.second_card_detected):
-                    self.card_handler.print_all_cards(self.player_cards, self.card_utils.card_counters)
-                    break
+            self.gui.update_idletasks()
+            self.gui.update()
 
-        # Update the GUI with the detected dealer cards
-        if dealer_cards:
-            card_info = {'dealer_card': dealer_cards[0]}  # Format the data as a dictionary
+    def process_player_predictions(self, predictions, player_index, region):
+        best_card = None
+        best_confidence = 0
+
+        for prediction in predictions:
+            x, y, class_label, confidence = prediction['x'], prediction['y'], prediction['class'], prediction[
+                'confidence']
+            if region.contains_point([x, y]):
+                card_name = self.card_utils.get_card_name(class_label)
+                if confidence > best_confidence:
+                    best_card = {'x': x, 'y': y, 'confidence': confidence, 'card_name': card_name}
+                    best_confidence = confidence
+
+        if best_card:
+            detected_card = best_card
+            if player_index not in self.locked_first_cards:
+                self.lock_and_update_player_card(player_index, detected_card, is_first_card=True)
+            elif player_index in self.locked_first_cards and player_index not in self.locked_second_cards:
+                self.lock_and_update_player_card(player_index, detected_card, is_first_card=False)
+            elif player_index in self.locked_second_cards:
+                self.update_if_higher_confidence(player_index, detected_card)
+
+    def lock_and_update_player_card(self, player_index, detected_card, is_first_card):
+        if is_first_card:
+            self.locked_first_cards.add(player_index)
+            self.detection_timers[player_index]["first_card"] = time.time()
         else:
-            card_info = {'dealer_card': "No card detected"}  # Handle the case where no card is detected
+            self.locked_second_cards.add(player_index)
+            self.detection_timers[player_index]["second_card"] = time.time()
 
-        self.update_dealer_card_display(card_info)
-        self.rounds_observed += 1
+        if not self.card_utils.is_duplicate_or_nearby_card(detected_card, self.player_cards[player_index]['cards']):
+            self.card_handler.add_or_update_player_card(detected_card, self.player_cards[player_index],
+                                                        detected_card['card_name'])
+            self.card_handler.print_all_cards(self.player_cards,
+                                              self.card_utils.card_counters)  # Update and print cards info
+
+    def update_if_higher_confidence(self, player_index, detected_card):
+        if detected_card['confidence'] > max(self.player_cards[player_index]['confidences']):
+            replace_index = self.player_cards[player_index]['confidences'].index(
+                min(self.player_cards[player_index]['confidences']))
+            self.player_cards[player_index]['cards'][replace_index] = detected_card['card_name']
+            self.player_cards[player_index]['confidences'][replace_index] = detected_card['confidence']
+            self.card_handler.print_all_cards(self.player_cards, self.card_utils.card_counters)
+
+    def update_gui(self):
+        self.update_player_cards_display(self.players_cards_data, self.dealer_up_card, self.card_utils.true_count,
+                                         constants.BASE_BET)
 
     def blackjack_decision(self, player_cards, dealer_up_card, true_count, base_bet):
         dealer_value = self.card_utils.get_dealer_card_value(dealer_up_card) if dealer_up_card != "Unknown" else "0"
         hand_value = self.card_utils.calculate_hand_value(player_cards)
 
-        # Directly handle values where the strategy is universally to stand
         if hand_value >= 17:
-            action = "S"  # Stand on 17, 18, 19, 20, 21
+            action = "S"
         else:
             hand_representation = self.card_utils.get_hand_representation(player_cards)
 
@@ -154,21 +165,18 @@ class BlackjackLogic:
         self.recommendations.append(constants.ACTION_MAPPING.get(action, "Hit" if action == "?" else action))
         return self.recommendations
 
-    def process_player_decisions_and_print_info(self, initial_cards_received, dealer_cards):
-        dealer_up_card = dealer_cards[0] if dealer_cards else "Unknown"
+    def process_player_decisions_and_print_info(self, initial_cards_received, dealer_up_card):
+        dealer_up_card = dealer_up_card[0] if dealer_up_card else "Unknown"
 
         for player_index, player_data in sorted(self.player_cards.items(), key=lambda x: x[0]):
             cards = player_data['cards']
 
-            # Calculate hand value and update initial card receipt status
             if len(cards) == 2 and not initial_cards_received[player_index]:
                 initial_cards_received[player_index] = True
 
-            # Once all players have received their initial two cards, print all cards
             if all(initial_cards_received.values()):
                 self.print_all_cards()
 
-            # Make decision recommendations based on the current state
             if initial_cards_received[player_index] or len(cards) > 2:
                 decision_recommendations = self.blackjack_decision(cards, dealer_up_card, self.card_utils.true_count,
                                                                    constants.BASE_BET)
@@ -181,10 +189,8 @@ class BlackjackLogic:
                     player_data['recommendation'] = decision_recommendations
                     self.card_utils.print_player_cards(player_index, cards, decision_recommendations)
 
-            # Prepare player's cards data for GUI update
             self.players_cards_data.append({'player_index': player_index, 'cards': cards})
 
-        # Update the GUI with the detected player cards
         self.update_player_cards_display(self.players_cards_data, dealer_up_card, self.card_utils.true_count,
                                          constants.BASE_BET)
 
@@ -195,9 +201,8 @@ class BlackjackLogic:
             print(
                 f"\nAccumulating card count data, betting strategy recommendations will start after {3 - self.rounds_observed} more rounds.")
 
-    # Print all cards in console
     def print_all_cards(self):
-        self.cards_info.clear()  # Clear previous card info
+        self.cards_info.clear()
         for player_index in sorted(self.player_cards):
             cards = self.player_cards[player_index]['cards']
             confidences = self.player_cards[player_index]['confidences']
@@ -206,88 +211,76 @@ class BlackjackLogic:
             for i, (card, conf) in enumerate(zip(cards, confidences), start=1):
                 card_info.append(f"[{i}] {card} (C: {conf * 100:.2f}%)")
 
+            self.cards_info.append(f"P{player_index + 1}: {' // '.join(card_info)}")
             print(f"P{player_index + 1}: {' // '.join(card_info)}")
 
         formatted_card_counts = [f"{value} => {count}x" for value, count in
                                  sorted(self.card_value_counts.items(), key=lambda item: item[0])]
-        total_cards = sum(self.card_value_counts.values())  # Sum up the counts of all cards for the total
+        total_cards = sum(self.card_value_counts.values())
         print(f"Card counts ({total_cards}):\n", "\n".join(formatted_card_counts))
 
     def update_player_cards_display(self, player_data_list, dealer_up_card, true_count, base_bet):
-        self.clear_player_cards()  # Clear the displayed cards
+        self.clear_player_cards()
 
-        start_y = 10  # Fixed starting y-position for the cards
-        total_width = 7 * (constants.CARD_WIDTH + constants.CARD_SPACING) + 8  # Total width for all columns
-        column_width = (total_width - 8) // 7  # Width of each column without borders
+        start_y = 10
+        total_width = 7 * (constants.CARD_WIDTH + constants.CARD_SPACING) + 8
+        column_width = (total_width - 8) // 7
 
-        for i in range(7):  # Iterate over 7 players to create columns
+        for i in range(7):
             start_x = i * (column_width + constants.CARD_SPACING) + constants.CARD_SPACING
 
-            # Check if player data is available for the current index
             player_data = next((data for data in player_data_list if data['player_index'] == i), None)
-            cards = player_data['cards'] if player_data else ['-', '-']  # Ensure two card slots
-            player_number = i + 1  # Player index (1-indexed)
+            cards = player_data['cards'] if player_data else ['-', '-']
+            player_number = i + 1
 
             card_display_y = start_y
 
             for card in cards:
-                if card != '-':  # Only create labels for detected cards
+                if card != '-':
                     photo_img = self.get_card_image(card)
                     card_label = tk.Label(self.gui.canvas, image=photo_img)
-                    card_label.image = photo_img  # Keep a reference to prevent garbage collection
+                    card_label.image = photo_img
                     card_label.place(x=start_x, y=card_display_y)
-                    self.player_cards_labels.append(card_label)  # Store the label in a list
-                    card_display_y += constants.CARD_HEIGHT + 10  # Update starting y-position for the next card
+                    self.player_cards_labels.append(card_label)
+                    card_display_y += constants.CARD_HEIGHT + 10
 
-            # Reset starting y-position for the next player's cards
             start_y = 10
             self.create_label(f"Player {player_number}", start_x + column_width // 2,
-                              self.gui.winfo_height() - 10,
-                              anchor="s")
+                              self.gui.winfo_height() - 10, anchor="s")
 
             decision = self.blackjack_decision(cards, dealer_up_card, true_count, base_bet)[0] if player_data else "-"
             decision_label = self.create_label(f"Decision: {decision}", start_x + column_width // 2,
                                                card_display_y + 20, anchor="n")
-            self.players_decision_labels.append(decision_label)  # Add to the global list
+            self.players_decision_labels.append(decision_label)
 
     def update_dealer_card_display(self, dealer_cards):
-        # Check if dealer_cards is not empty and then proceed; otherwise, use a default value or image
         card_value = dealer_cards[0] if dealer_cards else "No card detected"
 
         if self.dealer_card_label is None:
-            self.dealer_card_label = tk.Label(self.gui)  # Create the label if it doesn't exist
-            self.dealer_card_label.place(relx=1.0,
-                                         rely=0.0,
-                                         x=-10,
-                                         y=20,
-                                         anchor='ne')  # Place it in the top-right corner
+            self.dealer_card_label = tk.Label(self.gui)
+            self.dealer_card_label.place(relx=1.0, rely=0.0, x=-10, y=20, anchor='ne')
 
         if card_value != "No card detected":
-            # Correct the file name format here based on the actual card value
-            # Assuming card_value is a string like 'Jack', '2', etc.
-            card_image_path = f"{constants.CARD_FOLDER_PATH}/{card_value.lower()}_of_spades.png"  # Ensure lowercase for consistency
+            card_image_path = f"{constants.CARD_FOLDER_PATH}/{card_value.lower()}_of_spades.png"
         else:
             card_image_path = constants.DEFAULT_CARD_IMAGE_PATH
 
         try:
             img = Image.open(card_image_path)
-            img = img.resize((100, 150))  # Resize the image to fit the label
+            img = img.resize((100, 150))
             imgtk = ImageTk.PhotoImage(image=img)
             self.dealer_card_label.config(image=imgtk)
-            self.dealer_card_label.image = imgtk  # Keep a reference to avoid garbage collection
+            self.dealer_card_label.image = imgtk
         except FileNotFoundError:
             print(f"Image file not found: {card_image_path}")
 
     def get_card_image(self, card):
-        card_image_path = self.utils.generate_card_image_path(card)  # Generate file path for the card image
-        if not os.path.exists(card_image_path):  # Check if the card image exists
+        card_image_path = self.utils.generate_card_image_path(card)
+        if not os.path.exists(card_image_path):
             print(f"Card image not found: {card_image_path}. Using default image.")
             card_image_path = constants.DEFAULT_CARD_IMAGE_PATH
-        # Load the card image
         card_image = cv2.imread(card_image_path)
-        # Convert BGR image to RGB and then to PIL Image
         pil_image = Image.fromarray(cv2.cvtColor(card_image, cv2.COLOR_BGR2RGB))
-        # Resize the image and convert to PhotoImage
         return ImageTk.PhotoImage(pil_image.resize((constants.CARD_WIDTH, constants.CARD_HEIGHT)))
 
     def create_label(self, text, x, y, anchor="n"):
@@ -295,40 +288,33 @@ class BlackjackLogic:
         label.place(x=x, y=y, anchor=anchor)
         return label
 
-    # Logic to reset some stuff for a new round
     def reset_for_new_round(self):
         self.player_cards.clear()
         self.players_cards_data.clear()
 
         empty_image = tk.PhotoImage()
         for label in self.player_cards_labels:
-            label.config(image=empty_image)  # Set the label to use the empty image
-            label.image = empty_image  # Keep a reference to prevent garbage collection
+            label.config(image=empty_image)
+            label.image = empty_image
 
-        # Reset the dealer card label to either an empty image or a default card image
-        if self.dealer_card_label:  # Check if the dealer_card_label exists
-            self.dealer_card_label.config(
-                image=empty_image)  # Set the dealer card to use the empty image
-            self.dealer_card_label.image = empty_image  # Keep a reference to prevent garbage collection
-            # If you have a default dealer card image, load it here instead of setting an empty image
+        if self.dealer_card_label:
+            self.dealer_card_label.config(image=empty_image)
+            self.dealer_card_label.image = empty_image
 
-        # Reset each player's decision label text
         for decision_label in self.players_decision_labels:
-            decision_label.config(text="")  # Clear the decision text
+            decision_label.config(text="")
 
         self.round_count += 1
-
-        # Update the round label with the new round count
         self.gui.round_label.config(text=f"Round: {self.round_count}")
 
         self.first_card_detected.clear()
         self.second_card_detected.clear()
         self.card_value_counts.clear()
         self.players_received_first_card.clear()
-        self.card_utils.counted_cards_this_round.clear()  # Reset the set of counted cards for the new round
+        self.card_utils.counted_cards_this_round.clear()
         print("Reset for new round.")
 
     def clear_player_cards(self):
         for label in self.player_cards_labels:
-            label.destroy()  # This removes the label from the canvas
-        self.player_cards_labels.clear()  # Clear the list for the next round
+            label.destroy()
+        self.player_cards_labels.clear()

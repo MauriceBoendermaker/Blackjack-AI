@@ -21,9 +21,6 @@ class GraphicalUserInterface(tk.Tk):
 
         self.reset_button = None
         self.background_processor = None
-        # self.round_label = None
-        # self.dealer_value_label = None
-
         self.pbox_generator = pbox_generator.PlayerBoxGenerator(self)
         self.monitor_utils = MonitorUtils()  # Initialize MonitorUtils instance
 
@@ -123,6 +120,7 @@ class GraphicalUserInterface(tk.Tk):
 
     def update_ui_callback(self):
         self.background_processor.update_gui_from_queue()
+        self.after(100, self.update_ui_callback)  # Ensure the callback runs periodically
 
 
 if __name__ == "__main__":
