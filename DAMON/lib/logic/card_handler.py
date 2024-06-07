@@ -69,7 +69,6 @@ class CardHandler:
         else:
             player_info['cards'].append(card_name)
             player_info['confidences'].append(detected_card['confidence'])
-        self.card_utils.counted_cards_this_round.add(card_name)
 
         print(f"Player {player_info} card updated: {player_info['cards']}")
         # self.update_gui()  # Ensure the GUI is updated
