@@ -71,5 +71,5 @@ class CardHandler:
             player_info['confidences'].append(detected_card['confidence'])
         self.card_utils.counted_cards_this_round.add(card_name)
 
-        # Print debug information to verify card updates
-        print(f"Player {replace_index} card updated: {player_info['cards']}")
+        print(f"Player {player_info} card updated: {player_info['cards']}")
+        # self.update_gui()  # Ensure the GUI is updated
