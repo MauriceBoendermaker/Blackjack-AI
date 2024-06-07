@@ -1,3 +1,14 @@
+# TODO: Implement system to detect splitted hands
+# TODO: Fix 2x Ace being counted as "12", instead of 2 (and thus split)
+# TODO: Finetune accuracy for both models (adjust parameters)
+# TODO: Refine player regions
+
+# UI:
+# TODO: Fix player count
+# TODO: Count total per-card amount
+# TODO: Implement advice per player according to default cheat sheet in
+# TODO: Implement OCR for Saldo and Current bet
+
 import threading
 
 import lib.common.constants as constants
