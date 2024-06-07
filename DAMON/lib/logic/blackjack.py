@@ -17,6 +17,12 @@ from .decision_making import DecisionMaking
 
 
 class BlackjackLogic:
+    class DetectionState:
+        WAITING_FOR_FIRST_CARD = "WAITING_FOR_FIRST_CARD"
+        FIRST_CARD_DETECTED = "FIRST_CARD_DETECTED"
+        WAITING_FOR_SECOND_CARD = "WAITING_FOR_SECOND_CARD"
+        SECOND_CARD_DETECTED = "SECOND_CARD_DETECTED"
+
     def __init__(self, gui):
         self.round_count = 0
         self.rounds_observed = 0
@@ -50,9 +56,11 @@ class BlackjackLogic:
         self.player_cards = defaultdict(lambda: {"cards": ["-", "-"], "confidences": [0.0, 0.0]})
         self.detection_timers = defaultdict(lambda: {"first_card": None, "second_card": None})
         self.detection_start_time = time.time()
-        self.locked_first_cards = set()
-        self.locked_second_cards = set()
+        self.locked_cards = defaultdict(set)  # Track locked card indices separately
+        self.manually_replaced_cards = defaultdict(set)  # Track manually replaced card indices separately
         self.player_regions = []
+        self.detection_states = defaultdict(
+            lambda: BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD)  # Track detection states for each player
 
     def initialize_screenshot(self):
         self.captured_screenshot = self.monitor_utils.capture_screen()
@@ -97,6 +105,11 @@ class BlackjackLogic:
             self.gui.update()
 
     def process_player_predictions(self, predictions, player_index, region):
+        state = self.detection_states[player_index]
+
+        if state == BlackjackLogic.DetectionState.SECOND_CARD_DETECTED:
+            return
+
         best_card = None
         best_confidence = 0
 
@@ -111,26 +124,29 @@ class BlackjackLogic:
 
         if best_card:
             detected_card = best_card
-            if player_index not in self.locked_first_cards:
-                self.lock_and_update_player_card(player_index, detected_card, is_first_card=True)
-            elif player_index in self.locked_first_cards and player_index not in self.locked_second_cards:
-                self.lock_and_update_player_card(player_index, detected_card, is_first_card=False)
-            elif player_index in self.locked_second_cards:
-                self.update_if_higher_confidence(player_index, detected_card)
+            print(f"Detected card for player {player_index} in state {state}: {detected_card}")
 
-    def lock_and_update_player_card(self, player_index, detected_card, is_first_card):
-        if is_first_card:
-            self.locked_first_cards.add(player_index)
-            self.detection_timers[player_index]["first_card"] = time.time()
-        else:
-            self.locked_second_cards.add(player_index)
-            self.detection_timers[player_index]["second_card"] = time.time()
+            if state == BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD:
+                self.lock_and_update_player_card(player_index, detected_card, card_index=0)
+                self.detection_states[player_index] = BlackjackLogic.DetectionState.FIRST_CARD_DETECTED
+                print(f"Transitioned to FIRST_CARD_DETECTED for player {player_index}")
+
+            elif state == BlackjackLogic.DetectionState.FIRST_CARD_DETECTED:
+                self.lock_and_update_player_card(player_index, detected_card, card_index=1)
+                self.detection_states[player_index] = BlackjackLogic.DetectionState.SECOND_CARD_DETECTED
+                print(f"Transitioned to SECOND_CARD_DETECTED for player {player_index}")
+
+    def lock_and_update_player_card(self, player_index, detected_card, card_index):
+        self.locked_cards[player_index].add(card_index)
+        self.detection_timers[player_index][f"card_{card_index}"] = time.time()
+        print(f"Card {card_index} locked for player {player_index}")
 
         if not self.card_utils.is_duplicate_or_nearby_card(detected_card, self.player_cards[player_index]['cards']):
             self.card_handler.add_or_update_player_card(detected_card, self.player_cards[player_index],
                                                         detected_card['card_name'])
             self.card_handler.print_all_cards(self.player_cards,
                                               self.card_utils.card_counters)  # Update and print cards info
+            self.update_gui()  # Ensure the GUI is updated
 
     def update_if_higher_confidence(self, player_index, detected_card):
         if detected_card['confidence'] > max(self.player_cards[player_index]['confidences']):
@@ -141,6 +157,9 @@ class BlackjackLogic:
             self.card_handler.print_all_cards(self.player_cards, self.card_utils.card_counters)
 
     def update_gui(self):
+        self.players_cards_data.clear()
+        for player_index, player_data in sorted(self.player_cards.items(), key=lambda x: x[0]):
+            self.players_cards_data.append({'player_index': player_index, 'cards': player_data['cards']})
         self.update_player_cards_display(self.players_cards_data, self.dealer_up_card, self.card_utils.true_count,
                                          constants.BASE_BET)
 
@@ -207,11 +226,12 @@ class BlackjackLogic:
             cards = self.player_cards[player_index]['cards']
             confidences = self.player_cards[player_index]['confidences']
 
+            card_info = []
             for i, (card, conf) in enumerate(zip(cards, confidences), start=1):
-                self.cards_info.append(f"[{i}] {card} (C: {conf * 100:.2f}%)")
+                card_info.append(f"[{i}] {card} (C: {conf * 100:.2f}%)")
 
-            self.cards_info.append(f"P{player_index + 1}: {' // '.join(self.cards_info)}")
-            print(f"P{player_index + 1}: {' // '.join(self.cards_info)}")
+            self.cards_info.append(f"P{player_index + 1}: {' // '.join(card_info)}")
+            print(f"P{player_index + 1}: {' // '.join(card_info)}")
 
         formatted_card_counts = [f"{value} => {count}x" for value, count in
                                  sorted(self.card_value_counts.items(), key=lambda item: item[0])]
@@ -234,12 +254,13 @@ class BlackjackLogic:
 
             card_display_y = start_y
 
-            for card in cards:
+            for j, card in enumerate(cards):
                 if card != '-':
                     photo_img = self.get_card_image(card)
                     card_label = tk.Label(self.gui.canvas, image=photo_img)
                     card_label.image = photo_img
                     card_label.place(x=start_x, y=card_display_y)
+                    card_label.bind("<Button-1>", lambda e, pi=i, ci=j: self.on_card_click(pi, ci))
                     self.player_cards_labels.append(card_label)
                     card_display_y += constants.CARD_HEIGHT + 10
 
@@ -251,6 +272,58 @@ class BlackjackLogic:
             decision_label = self.create_label(f"Decision: {decision}", start_x + column_width // 2,
                                                card_display_y + 20, anchor="n")
             self.players_decision_labels.append(decision_label)
+
+    def on_card_click(self, player_index, card_index):
+        self.open_card_selection_window(player_index, card_index)
+
+    def open_card_selection_window(self, player_index, card_index):
+        selection_window = tk.Toplevel(self.gui)
+        selection_window.title("Select Card")
+
+        available_cards = self.get_all_available_cards()
+
+        for i, card in enumerate(available_cards):
+            card_image_path = self.utils.generate_card_image_path(card)
+            try:
+                img = Image.open(card_image_path)
+                img = img.resize((60, 90))  # Resize the image to fit the button
+                imgtk = ImageTk.PhotoImage(image=img)
+                card_button = tk.Button(selection_window, image=imgtk,
+                                        command=lambda c=card: self.replace_card(player_index, card_index, c))
+                card_button.image = imgtk  # Keep a reference to avoid garbage collection
+                card_button.grid(row=i // 10, column=i % 10)  # Arrange buttons in a grid
+            except FileNotFoundError:
+                print(f"Image file not found: {card_image_path}")
+
+    def get_all_available_cards(self):
+        suits = ['Spades', 'Hearts', 'Diamonds', 'Clubs']
+        values = constants.VALUE_MAPPING.keys()
+        return [f"{value} of {suit}" for suit in suits for value in values]
+
+    def replace_card(self, player_index, card_index, new_card):
+        self.player_cards[player_index]['cards'][card_index] = new_card
+        self.player_cards[player_index]['confidences'][
+            card_index] = 1.0  # Assuming full confidence for manual replacement
+        self.manually_replaced_cards[player_index].add(card_index)  # Mark card index as manually replaced
+        self.locked_cards[player_index].add(card_index)  # Also lock the card index
+        print(f"Manually replaced card {card_index} for player {player_index} with {new_card}")
+
+        if card_index == 0 and self.detection_states[player_index] == BlackjackLogic.DetectionState.FIRST_CARD_DETECTED:
+            self.detection_states[player_index] = BlackjackLogic.DetectionState.WAITING_FOR_SECOND_CARD
+            print(f"Transitioned to WAITING_FOR_SECOND_CARD for player {player_index}")
+
+        elif card_index == 1 and self.detection_states[
+            player_index] == BlackjackLogic.DetectionState.WAITING_FOR_SECOND_CARD:
+            self.detection_states[player_index] = BlackjackLogic.DetectionState.SECOND_CARD_DETECTED
+            print(f"Transitioned to SECOND_CARD_DETECTED for player {player_index}")
+
+        # Update GUI
+        self.update_gui()
+
+        # Close all Toplevel windows (the card selection window)
+        for widget in self.gui.winfo_children():
+            if isinstance(widget, tk.Toplevel):
+                widget.destroy()
 
     def update_dealer_card_display(self, dealer_cards):
         card_value = dealer_cards[0] if dealer_cards else "No card detected"
