@@ -10,7 +10,7 @@
 import os
 import csv
 import time
-import keyboard
+# import keyboard
 import tempfile
 import threading
 import numpy as np
@@ -86,7 +86,7 @@ end_round_flag = False
 
 def listen_for_arrow_up():
     print("Press Arrow Up to manually end the round...")
-    keyboard.wait('up')
+    # keyboard.wait('up')
     global end_round_flag
     end_round_flag = True
     print("Arrow Up pressed. Ending the round.")
