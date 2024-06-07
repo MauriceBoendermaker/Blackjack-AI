@@ -6,7 +6,6 @@ class CardUtils:
     def __init__(self):
         self.true_count = 0
         self.running_count = 0
-        # self.card_counters = {}
         self.hand_value = None
         self.card_counters = {str(value): 0 for value in set(constants.VALUE_MAPPING.values())}
         self.card_counter_labels = {}
