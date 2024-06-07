@@ -8,6 +8,8 @@ from .card_utils import CardUtils
 
 class CardHandler:
     def __init__(self):
+        self.dealer_cards = []
+        self.cards_info = []
         self.card_utils = CardUtils()
 
     def handle_card_detection(self, card_name):
@@ -34,25 +36,23 @@ class CardHandler:
                                     overlap=constants.PREDICTION_OVERLAP_DEALER).json()['predictions']
         os.unlink(temp_file_path)  # Delete the temp file after prediction
 
-        dealer_cards = []
         for prediction in predictions:
             class_label = prediction['class']
             card_name = dealer_class_mapping.get(class_label, "Unknown")
-            dealer_cards.append(card_name)
+            self.dealer_cards.append(card_name)
 
         # update_dealer_card_display(dealer_cards)  # Update the GUI with the first dealer card
-        return dealer_cards
+        return self.dealer_cards
 
     def print_all_cards(self, player_cards, card_value_counts):
         for player_index in sorted(player_cards):
             cards = player_cards[player_index]['cards']
             confidences = player_cards[player_index]['confidences']
 
-            cards_info = []
             for i, (card, conf) in enumerate(zip(cards, confidences), start=1):
-                cards_info.append(f"[{i}] {card} (C: {conf * 100:.2f}%)")
+                self.cards_info.append(f"[{i}] {card} (C: {conf * 100:.2f}%)")
 
-            print(f"P{player_index + 1}: {' // '.join(cards_info)}")
+            print(f"P{player_index + 1}: {' // '.join(self.cards_info)}")
 
         formatted_card_counts = [f"{value} => {count}x" for value, count in
                                  sorted(card_value_counts.items(), key=lambda item: item[0])]
@@ -70,8 +70,3 @@ class CardHandler:
             player_info['confidences'].append(detected_card['confidence'])
         # Ensure unique identification for counted cards, might need adjustment if spatial data is to be included
         self.card_utils.counted_cards_this_round.add(card_name)
-
-
-# Example usage
-card_handler = CardHandler()
-# Now you can call card_handler.handle_card_detection, card_handler.calculate_true_count, etc.
