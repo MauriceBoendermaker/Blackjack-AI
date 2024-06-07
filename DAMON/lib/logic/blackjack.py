@@ -26,6 +26,7 @@ class BlackjackLogic:
         self.dealer_card_label = None
         self.base_bet = constants.BASE_BET
         self.deck_count = constants.DECK_COUNT
+        self.detected_card = {}
         self.blackjack_strategy = {}
         self.cards_info = []
         self.recommendations = []
@@ -44,14 +45,15 @@ class BlackjackLogic:
         self.model_players = self.utils.initialize_player_model()
         self.model_dealer = self.utils.initialize_dealer_model()
         self.card_value_counts = defaultdict(int)
+        self.initial_cards_received = defaultdict(bool)
         self.player_cards = defaultdict(lambda: {"cards": ["-", "-"], "confidences": [0.0, 0.0]})
         self.detection_timers = defaultdict(lambda: {"first_card": None, "second_card": None})
+        self.detection_start_time = time.time()
         self.locked_first_cards = set()
         self.locked_second_cards = set()
         self.player_regions = []
 
     def initialize_screenshot(self):
-        self.detection_start_time = time.time()
         self.captured_screenshot = self.monitor_utils.capture_screen()
 
     def populate_blackjack_strategy(self):  # Read the CSV file and populate the strategy dictionary
@@ -65,8 +67,7 @@ class BlackjackLogic:
         self.monitor_utils.set_monitor(monitor)
         self.initialize_screenshot()  # Initialize screenshot after monitor is set
 
-    def capture_screen_and_track_cards(self):  # Continuously capture screen and perform object detection
-        initial_cards_received = defaultdict(bool)
+    def capture_screen_and_track_cards(self):
         current_resolution = self.monitor_utils.get_current_resolution()
         scale_x, scale_y = self.monitor_utils.get_scaling_factors(constants.BASE_RESOLUTION, current_resolution)
         self.player_regions = self.monitor_utils.scale_player_regions(constants.BASE_PLAYER_REGIONS, scale_x, scale_y)
@@ -87,27 +88,33 @@ class BlackjackLogic:
             dealer_cards = self.card_handler.capture_dealer_cards(dealer_area, self.model_dealer)
             print(f"Dealer's cards: {dealer_cards}")
 
+            # Predict using object detection model
             predictions = self.model_players.predict(temp_file_path,
                                                      confidence=constants.PREDICTION_CONFIDENCE_PLAYERS,
                                                      overlap=constants.PREDICTION_OVERLAP_PLAYERS).json()['predictions']
 
             print(f"{len(predictions)} predictions")
 
+            # Process each prediction
             for prediction in predictions:
                 x, y, class_label, confidence = prediction['x'], prediction['y'], prediction['class'], prediction[
                     'confidence']
                 card_name = self.card_utils.get_card_name(class_label)
 
-                self.card_utils.update_card_counter(card_name, 1)
-                self.card_handler.handle_card_detection(card_name)
+                # self.card_utils.update_card_counter(card_name, 1)
+                self.card_utils.update_count(card_name)
+                self.card_handler.handle_card_detection(card_name)  # Update the card counter
 
                 for i, region in enumerate(self.player_regions):
                     if region.contains_point([x, y]):
                         detected_card = {'x': x, 'y': y, 'confidence': confidence, 'card_name': card_name}
-                        self.handle_card_detection(i, detected_card)
+                        if not self.card_utils.is_duplicate_or_nearby_card(detected_card,
+                                                                           self.player_cards[i]['cards']):
+                            self.card_handler.add_or_update_player_card(detected_card, self.player_cards[i], card_name)
+                        # self.card_handler.handle_card_detection(i, detected_card)
 
-            self.card_utils.true_count = self.card_utils.calculate_true_count()
-            self.process_player_decisions_and_print_info(initial_cards_received, dealer_cards)
+            self.card_utils.calculate_true_count()
+            self.process_player_decisions_and_print_info(self.initial_cards_received, dealer_cards)
 
             # Delete temporary file
             os.unlink(temp_file_path)
@@ -118,40 +125,13 @@ class BlackjackLogic:
                     break
 
         # Update the GUI with the detected dealer cards
-        self.update_dealer_card_display(dealer_cards)
-        self.rounds_observed += 1
-
-    def handle_card_detection(self, player_index, detected_card):
-        current_time = time.time()
-        card_slot = "first_card" if player_index not in self.locked_first_cards else "second_card"
-
-        if card_slot == "first_card" and player_index in self.locked_first_cards:
-            return
-
-        if card_slot == "second_card" and player_index in self.locked_second_cards:
-            return
-
-        timer = self.detection_timers[player_index][card_slot]
-
-        if timer is None:
-            self.detection_timers[player_index][card_slot] = {"time": current_time, "card": detected_card}
+        if dealer_cards:
+            card_info = {'dealer_card': dealer_cards[0]}  # Format the data as a dictionary
         else:
-            elapsed_time = current_time - timer["time"]
-            if elapsed_time > 2:  # 2-second delay to ensure highest confidence card is selected
-                if detected_card["confidence"] > timer["card"]["confidence"]:
-                    self.detection_timers[player_index][card_slot] = {"time": current_time, "card": detected_card}
-                self.player_cards[player_index]["cards"][0 if card_slot == "first_card" else 1] = \
-                    self.detection_timers[player_index][card_slot]["card"]["card_name"]
-                self.player_cards[player_index]["confidences"][0 if card_slot == "first_card" else 1] = \
-                    self.detection_timers[player_index][card_slot]["card"]["confidence"]
-                self.detection_timers[player_index][card_slot] = None
+            card_info = {'dealer_card': "No card detected"}  # Handle the case where no card is detected
 
-                if card_slot == "first_card":
-                    self.locked_first_cards.add(player_index)
-                    self.players_received_first_card.add(player_index)
-                else:
-                    self.locked_second_cards.add(player_index)
-                    self.second_card_detected.add(player_index)
+        self.update_dealer_card_display(card_info)
+        self.rounds_observed += 1
 
     def blackjack_decision(self, player_cards, dealer_up_card, true_count, base_bet):
         dealer_value = self.card_utils.get_dealer_card_value(dealer_up_card) if dealer_up_card != "Unknown" else "0"
