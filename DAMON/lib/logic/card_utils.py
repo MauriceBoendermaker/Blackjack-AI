@@ -6,9 +6,9 @@ class CardUtils:
     def __init__(self):
         self.true_count = 0
         self.running_count = 0
-        self.card_counters = {}
+        # self.card_counters = {}
         self.hand_value = None
-        # self.card_counters = {str(value): 0 for value in set(constants.VALUE_MAPPING.values())}
+        self.card_counters = {str(value): 0 for value in set(constants.VALUE_MAPPING.values())}
         self.card_counter_labels = {}
         self.counted_cards_this_round = set()
 
@@ -71,10 +71,10 @@ class CardUtils:
 
     # Print player cards in console
     def print_player_cards(self, player_index, cards, recommendation):
-        self.hand_value = self.calculate_hand_value(cards)
+        hand_value = self.calculate_hand_value(cards)
         cards_info = " // ".join([f"[{i + 1}] {card}" for i, card in enumerate(cards)])
         print(
-            f"P{player_index + 1}: {cards_info}. Card value is {self.hand_value}. Recommended action: {', '.join(recommendation)}.")
+            f"P{player_index + 1}: {cards_info}. Card value is {hand_value}. Recommended action: {', '.join(recommendation)}.")
 
     def get_hand_representation(self, cards):
         # Check for pairs of tens or face cards
@@ -98,8 +98,8 @@ class CardUtils:
         total, aces = 0, 0
 
         for card in cards:  # Calculate the total value and count the aces
-            card_value = self.get_card_value(
-                card.split(' ')[0])  # Extract the value part (e.g., "Ace" from "Ace of Diamonds")
+            # Extract the value part (e.g., "Ace" from "Ace of Diamonds")
+            card_value = self.get_card_value(card.split(' ')[0])
             if card_value == 1:  # Ace is counted as 1 initially
                 aces += 1
             else:
@@ -119,5 +119,4 @@ class CardUtils:
     def is_pair_hand(self, cards):
         if len(cards) != 2:
             return False
-        return self.get_card_value(cards[0].split(' ')[0]) == self.get_card_value(
-            cards[1].split(' ')[0])
+        return self.get_card_value(cards[0].split(' ')[0]) == self.get_card_value(cards[1].split(' ')[0])

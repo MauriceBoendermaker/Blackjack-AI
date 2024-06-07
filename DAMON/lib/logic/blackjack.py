@@ -111,7 +111,6 @@ class BlackjackLogic:
                         if not self.card_utils.is_duplicate_or_nearby_card(detected_card,
                                                                            self.player_cards[i]['cards']):
                             self.card_handler.add_or_update_player_card(detected_card, self.player_cards[i], card_name)
-                        # self.card_handler.handle_card_detection(i, detected_card)
 
             self.card_utils.calculate_true_count()
             self.process_player_decisions_and_print_info(self.initial_cards_received, dealer_cards)
@@ -223,15 +222,14 @@ class BlackjackLogic:
 
         for i in range(7):  # Iterate over 7 players to create columns
             start_x = i * (column_width + constants.CARD_SPACING) + constants.CARD_SPACING
-            self.gui.canvas.create_rectangle(start_x, start_y, start_x + column_width,
-                                             start_y + self.gui.winfo_height(),
-                                             outline="black", width=1)
+
             # Check if player data is available for the current index
             player_data = next((data for data in player_data_list if data['player_index'] == i), None)
             cards = player_data['cards'] if player_data else ['-', '-']  # Ensure two card slots
             player_number = i + 1  # Player index (1-indexed)
 
             card_display_y = start_y
+
             for card in cards:
                 if card != '-':  # Only create labels for detected cards
                     photo_img = self.get_card_image(card)
@@ -319,15 +317,14 @@ class BlackjackLogic:
             decision_label.config(text="")  # Clear the decision text
 
         self.round_count += 1
-        self.gui.round_label.config(
-            text=f"Round: {self.round_count}")  # Update the round label with the new round count
 
-        self.players_received_first_card.clear()
+        # Update the round label with the new round count
+        self.gui.round_label.config(text=f"Round: {self.round_count}")
+
         self.first_card_detected.clear()
         self.second_card_detected.clear()
-        self.locked_first_cards.clear()
-        self.locked_second_cards.clear()
         self.card_value_counts.clear()
+        self.players_received_first_card.clear()
         self.card_utils.counted_cards_this_round.clear()  # Reset the set of counted cards for the new round
         print("Reset for new round.")
 
