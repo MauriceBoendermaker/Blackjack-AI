@@ -19,9 +19,10 @@ class GraphicalUserInterface(tk.Tk):
         self.geometry(constants.SIZE)
         self.resizable(False, False)  # Prevent window resizing
 
-        self.round_label = None
         self.reset_button = None
-        self.dealer_value_label = None
+        self.background_processor = None
+        # self.round_label = None
+        # self.dealer_value_label = None
 
         self.pbox_generator = pbox_generator.PlayerBoxGenerator(self)
         self.monitor_utils = MonitorUtils()  # Initialize MonitorUtils instance
@@ -29,41 +30,43 @@ class GraphicalUserInterface(tk.Tk):
         self.monitor_var = tk.StringVar()
         self.monitor_selection_frame = tk.Frame(self)
         self.monitor_selection_frame.pack()
-
         self.monitor_label = tk.Label(self.monitor_selection_frame, text="Select Monitor:")
         self.monitor_label.pack(side=tk.LEFT)
-
-        self.monitor_combo = ttk.Combobox(
-            self.monitor_selection_frame, textvariable=self.monitor_var, state="readonly"
-        )
+        self.monitor_combo = ttk.Combobox(self.monitor_selection_frame, textvariable=self.monitor_var, state="readonly")
         self.monitor_combo.pack(side=tk.LEFT)
 
         self.resolution_label = tk.Label(self.monitor_selection_frame, text="Resolution: ")
         self.resolution_label.pack(side=tk.LEFT)
-
         self.resolution_var = tk.StringVar()
         self.resolution_display = tk.Label(self.monitor_selection_frame, textvariable=self.resolution_var)
         self.resolution_display.pack(side=tk.LEFT)
 
-        self.confirm_button = tk.Button(
-            self.monitor_selection_frame, text="Confirm", command=self.confirm_monitor_selection
-        )
+        self.confirm_button = tk.Button(self.monitor_selection_frame,
+                                        text="Confirm",
+                                        command=self.confirm_monitor_selection)
         self.confirm_button.pack(side=tk.LEFT)
 
-        self.pbox_gen_button = tk.Button(
-            self, text="Generate Player Boxes", command=self.pbox_generator.generate, state=tk.DISABLED
-        )
+        self.pbox_gen_button = tk.Button(self,
+                                         text="Generate Player Boxes",
+                                         command=self.pbox_generator.generate,
+                                         state=tk.DISABLED)
         self.pbox_gen_button.pack()
 
-        self.start_button = tk.Button(
-            self, text="Start", command=self.start
-        )
+        self.start_button = tk.Button(self, text="Start", command=self.start)
         self.start_button.pack(pady=20)
+
+        self.round_label = tk.Label(self, text=f"Round: 000")
+        self.round_label.place(x=10, y=5)
+
+        self.dealer_value_label = tk.Label(self, text="Dealer has: ")
+        self.dealer_value_label.place(relx=1.0,
+                                      rely=0.0,
+                                      x=-50,
+                                      y=0,
+                                      anchor='ne')  # Adjusted for top-right with padding
 
         self.canvas = tk.Canvas(self)
         self.canvas.pack(fill=tk.BOTH, expand=True)
-
-        self.background_processor = None
 
         self.draw_canvas()
         self.populate_monitors()
