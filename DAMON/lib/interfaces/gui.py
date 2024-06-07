@@ -73,8 +73,13 @@ class GraphicalUserInterface(tk.Tk):
     def draw_canvas(self):
         self.canvas.create_rectangle(50, 50, 200, 100, fill="black", outline="white")
         self.canvas.create_text(125, 75, text="Dealer", fill="white")
-        self.canvas.create_rectangle(50, 400, 200, 450, fill="black", outline="white")
-        self.canvas.create_text(125, 425, text="Player", fill="white")
+        for i in range(7):
+            x1 = 50 + i * (constants.CARD_WIDTH + constants.CARD_SPACING)
+            y1 = 150
+            x2 = x1 + constants.CARD_WIDTH
+            y2 = y1 + constants.CARD_HEIGHT
+            self.canvas.create_rectangle(x1, y1, x2, y2, outline="black")
+            self.canvas.create_text((x1 + x2) // 2, y2 + 20, text=f"Player {i + 1}", fill="black")
 
     def populate_monitors(self):
         monitors = screeninfo.get_monitors()
@@ -107,6 +112,7 @@ class GraphicalUserInterface(tk.Tk):
             messagebox.showerror("Error", "Please confirm monitor selection before starting the game.")
             return
         self.clear_screen()
+        self.draw_canvas()  # Redraw the canvas after clearing it
         if not self.background_processor:
             self.background_processor = BackgroundProcessor(self.update_ui_callback, self)
             self.background_processor.blackjack_logic.set_monitor(self.monitor_utils.monitor)
