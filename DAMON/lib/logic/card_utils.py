@@ -1,5 +1,5 @@
 from ..common import constants
-from ..common.card_mappings import class_mapping, dealer_class_mapping, dealer_class_mapping2
+from ..common.card_mappings import class_mapping
 
 
 class CardUtils:
