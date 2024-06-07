@@ -105,7 +105,7 @@ class BlackjackLogic:
                 'confidence']
             if region.contains_point([x, y]):
                 card_name = self.card_utils.get_card_name(class_label)
-                if confidence > best_confidence:
+                if confidence > best_confidence and card_name not in self.player_cards[player_index]['cards']:
                     best_card = {'x': x, 'y': y, 'confidence': confidence, 'card_name': card_name}
                     best_confidence = confidence
 
@@ -207,12 +207,11 @@ class BlackjackLogic:
             cards = self.player_cards[player_index]['cards']
             confidences = self.player_cards[player_index]['confidences']
 
-            card_info = []
             for i, (card, conf) in enumerate(zip(cards, confidences), start=1):
-                card_info.append(f"[{i}] {card} (C: {conf * 100:.2f}%)")
+                self.cards_info.append(f"[{i}] {card} (C: {conf * 100:.2f}%)")
 
-            self.cards_info.append(f"P{player_index + 1}: {' // '.join(card_info)}")
-            print(f"P{player_index + 1}: {' // '.join(card_info)}")
+            self.cards_info.append(f"P{player_index + 1}: {' // '.join(self.cards_info)}")
+            print(f"P{player_index + 1}: {' // '.join(self.cards_info)}")
 
         formatted_card_counts = [f"{value} => {count}x" for value, count in
                                  sorted(self.card_value_counts.items(), key=lambda item: item[0])]
