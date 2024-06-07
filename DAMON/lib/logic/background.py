@@ -1,5 +1,6 @@
 import queue
 import threading
+import time
 
 from .blackjack import BlackjackLogic
 from ..common import constants
@@ -20,6 +21,9 @@ class BackgroundProcessor:
 
     def background_processing(self):
         while True:
+            self.blackjack_logic.capture_screen_and_track_cards()
+            self.update_ui_callback()
+            time.sleep(0.1)  # Add a short delay to avoid rapid flickering
             self.blackjack_logic.capture_screen_and_track_cards()
             self.update_queue.put("update")
 
