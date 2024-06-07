@@ -1,5 +1,4 @@
 import threading
-import os
 
 import lib.common.constants as constants
 from lib.interfaces.gui import GraphicalUserInterface
