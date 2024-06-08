@@ -19,11 +19,6 @@ class GraphicalUserInterface(tk.Tk):
         self.geometry(constants.SIZE)
         self.resizable(False, False)  # Prevent window resizing
 
-        self.style = ttk.Style()
-        self.style.configure('TFrame', background='#f0f0f0')
-        self.style.configure('TLabel', background='#f0f0f0', padding=20)  # Increase padding
-        self.style.configure('TButton', padding=20)  # Increase padding
-
         self.reset_button = None
         self.background_processor = None
 
@@ -79,8 +74,7 @@ class GraphicalUserInterface(tk.Tk):
             x2 = x1 + constants.CARD_WIDTH
             y2 = y1 + constants.CARD_HEIGHT
             self.canvas.create_rectangle(x1, y1, x2, y2, outline="black")
-            self.canvas.create_text((x1 + x2) // 2, y2 + 30, text=f"Player {i + 1}",
-                                    fill="black")  # Adjust text positioning
+            self.canvas.create_text((x1 + x2) // 2, y2 + 30, text=f"Player {i + 1}", fill="black")
 
     def populate_monitors(self):
         monitors = screeninfo.get_monitors()
@@ -95,7 +89,7 @@ class GraphicalUserInterface(tk.Tk):
         monitors = screeninfo.get_monitors()
         selected_monitor = monitors[selected_monitor_index]
         self.pbox_generator.set_monitor(selected_monitor)
-        self.monitor_utils.set_monitor(selected_monitor)  # Pass the monitor to MonitorUtils
+        self.monitor_utils.set_monitor(selected_monitor)
         resolution_text = f"{selected_monitor.width}x{selected_monitor.height}"
         self.resolution_var.set(resolution_text)
         self.pbox_gen_button.config(state=tk.NORMAL)
@@ -113,7 +107,7 @@ class GraphicalUserInterface(tk.Tk):
             messagebox.showerror("Error", "Please confirm monitor selection before starting the game.")
             return
         self.clear_screen()
-        self.draw_canvas()  # Redraw the canvas after clearing it
+        self.draw_canvas()
         if not self.background_processor:
             self.background_processor = BackgroundProcessor(self.update_ui_callback, self)
             self.background_processor.blackjack_logic.set_monitor(self.monitor_utils.monitor)
@@ -121,9 +115,3 @@ class GraphicalUserInterface(tk.Tk):
 
     def update_ui_callback(self):
         self.background_processor.update_gui_from_queue()
-        self.after(100, self.update_ui_callback)  # Ensure the callback runs periodically
-
-
-if __name__ == "__main__":
-    root = GraphicalUserInterface()
-    root.mainloop()
