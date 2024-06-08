@@ -49,17 +49,17 @@ VALUE_MAPPING = {
 ACTION_MAPPING = {  # No need to map D/H, D/S, P/H and R/H
     "H": "Hit",
     "S": "Stand",
+    "D": "Double Down",
     "P": "Split",
+    "-": "-"
 }
 
 ACTION_COLORS = {
-    "H": "blue",
-    "S": "red",
-    "D/H": "green",
-    "D/S": "green",
-    "P": "skyblue",
-    "R/H": "purple",
-    "P/H": "orange"
+    "H": "green",
+    "S": "blue",
+    "D": "orange",
+    "P": "purple",
+    "-": "black"
 }
 
 # Misc
