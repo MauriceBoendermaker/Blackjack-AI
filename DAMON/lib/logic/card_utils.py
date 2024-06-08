@@ -15,6 +15,11 @@ class CardUtils:
     def get_card_name(self, class_label):
         return class_mapping.get(class_label, "Unknown")
 
+    def get_all_card_names(self):
+        suits = ['Spades', 'Hearts', 'Diamonds', 'Clubs']
+        values = constants.VALUE_MAPPING.keys()
+        return [f"{value} of {suit}" for suit in suits for value in values]
+
     def update_count(self, card_name):
         card_value = self.get_card_value(card_name)
         if card_value >= 2 and card_value <= 6:
@@ -77,22 +82,18 @@ class CardUtils:
             f"P{player_index + 1}: {cards_info}. Card value is {hand_value}. Recommended action: {recommendation_text}.")
 
     def get_hand_representation(self, cards):
-        # Check for pairs of tens or face cards
-        if len(cards) == 2 and all(card.split(' ')[0] in ['10', 'Jack', 'Queen', 'King'] for card in cards):
-            return "10,10"  # Represent as a pair of tens for strategy lookup
+        if self.is_pair_hand(cards):
+            pair_value = str(self.get_card_value(cards[0].split(' ')[0]))
+            pair_value = "10" if pair_value in ["J", "Q", "K"] else pair_value
+            return f"Pair {pair_value}"
 
-        if self.is_soft_hand(cards):  # Existing logic for soft hands
+        if self.is_soft_hand(cards):
             non_ace_total = sum(
                 [self.get_card_value(card.split(' ')[0]) for card in cards if card.split(' ')[0] != 'Ace'])
             return f"A,{non_ace_total}"
 
-        elif self.is_pair_hand(cards):  # Check if the hand is a pair
-            value = self.get_card_value(cards[0].split(' ')[0])
-            return f"{value},{value}"
-
-        else:  # For other hands, return the total value
-            total = self.calculate_hand_value(cards)
-            return str(total)
+        hand_total = self.calculate_hand_value(cards)
+        return str(hand_total)
 
     def calculate_hand_value(self, cards):
         total, aces = 0, 0

@@ -25,6 +25,7 @@ class BlackjackLogic:
         SECOND_CARD_DETECTED = "SECOND_CARD_DETECTED"
 
     def __init__(self, gui):
+        self.gui = gui
         self.round_count = 0
         self.rounds_observed = 0
         self.dealer_value = 0
@@ -36,7 +37,8 @@ class BlackjackLogic:
         self.deck_count = constants.DECK_COUNT
         self.detected_card = {}
         self.blackjack_strategy = {}
-        self.load_blackjack_strategy()
+        self.load_strategy()
+        self.create_dealer_card_placeholder()
         self.cards_info = []
         self.recommendations = []
         self.players_cards_data = []
@@ -46,7 +48,6 @@ class BlackjackLogic:
         self.second_card_detected = set()
         self.players_received_first_card = set()
         self.utils = Utils()
-        self.gui = gui
         self.card_handler = CardHandler()
         self.card_utils = CardUtils()
         self.monitor_utils = MonitorUtils()
@@ -67,12 +68,14 @@ class BlackjackLogic:
     def initialize_screenshot(self):
         self.captured_screenshot = self.monitor_utils.capture_screen()
 
-    def load_blackjack_strategy(self):
+    def load_strategy(self):
+        strategy = {}
         with open(constants.CSV_FILE_PATH, newline='') as csvfile:
             reader = csv.reader(csvfile, delimiter=';')
             for row in reader:
                 dealer_card, player_hand, action = row
-                self.blackjack_strategy[(dealer_card, player_hand)] = action
+                strategy[(dealer_card, player_hand)] = action
+        self.blackjack_strategy = strategy
 
     def set_monitor(self, monitor):
         self.monitor_utils.set_monitor(monitor)
@@ -176,9 +179,15 @@ class BlackjackLogic:
 
             action = self.blackjack_strategy.get(action_key, "?")
 
-        colored_action = self.get_colored_action(action)
-        self.recommendations.append(colored_action[0])
-        return [colored_action]
+        if action == "?":
+            print(
+                f"Warning: Strategy not found for dealer up card {dealer_value} and player hand {hand_representation}")
+
+        mapped_action = constants.ACTION_MAPPING.get(action, "Hit" if action == "?" else action)
+        color = self.get_action_color(action)
+
+        self.recommendations.append((mapped_action, color))
+        return self.recommendations
 
     def get_colored_action(self, action):
         if action in constants.ACTION_MAPPING:
@@ -192,8 +201,8 @@ class BlackjackLogic:
     def get_action_color(self, action):
         return constants.ACTION_COLORS.get(action, "black")
 
-    def process_player_decisions_and_print_info(self, initial_cards_received, dealer_up_card):
-        dealer_up_card = dealer_up_card[0] if dealer_up_card else "Unknown"
+    def process_player_decisions_and_print_info(self, initial_cards_received, dealer_cards):
+        dealer_up_card = dealer_cards[0] if dealer_cards else "Unknown"
 
         for player_index, player_data in sorted(self.player_cards.items(), key=lambda x: x[0]):
             cards = player_data['cards']
@@ -205,8 +214,12 @@ class BlackjackLogic:
                 self.print_all_cards()
 
             if initial_cards_received[player_index] or len(cards) > 2:
-                decision_recommendations = self.blackjack_decision(cards, dealer_up_card, self.card_utils.true_count,
-                                                                   constants.BASE_BET)
+                if dealer_up_card == "Unknown":
+                    decision_recommendations = [("Waiting for the dealer card", "black")]
+                else:
+                    decision_recommendations = self.blackjack_decision(cards, dealer_up_card,
+                                                                       self.card_utils.true_count, constants.BASE_BET)
+
                 previous_recommendation = player_data.get('recommendation')
 
                 if previous_recommendation != decision_recommendations:
@@ -305,11 +318,14 @@ class BlackjackLogic:
     def on_card_click(self, player_index, card_index):
         self.open_card_selection_window(player_index, card_index)
 
+    def on_dealer_card_click(self):
+        self.open_card_selection_window("dealer", 0)
+
     def open_card_selection_window(self, player_index, card_index):
         selection_window = tk.Toplevel(self.gui)
         selection_window.title("Select Card")
 
-        available_cards = self.get_all_available_cards()
+        available_cards = self.card_utils.get_all_card_names()
 
         for i, card in enumerate(available_cards):
             card_image_path = self.utils.generate_card_image_path(card)
@@ -332,25 +348,28 @@ class BlackjackLogic:
         default_button.image = default_imgtk  # Keep a reference to avoid garbage collection
         default_button.grid(row=len(available_cards) // 10, column=0)
 
-    def get_all_available_cards(self):
-        suits = ['Spades', 'Hearts', 'Diamonds', 'Clubs']
-        values = constants.VALUE_MAPPING.keys()
-        return [f"{value} of {suit}" for suit in suits for value in values]
-
-    def replace_card(self, player_index, card_index, new_card):
-        if new_card == "-":
-            self.player_cards[player_index]['cards'][card_index] = "-"
-            self.player_cards[player_index]['confidences'][card_index] = 0.0
-            self.locked_cards[player_index].discard(card_index)
-            self.manually_replaced_cards[player_index].discard(card_index)
+    def replace_card(self, player_index, card_index, card_name):
+        if player_index == "dealer":
+            if card_name == "-":
+                self.dealer_up_card = None
+                self.update_dealer_card_display([])
+            else:
+                self.dealer_up_card = card_name
+                self.update_dealer_card_display([card_name])
         else:
-            self.player_cards[player_index]['cards'][card_index] = new_card
-            self.player_cards[player_index]['confidences'][
-                card_index] = 1.0  # Assuming full confidence for manual replacement
-            self.manually_replaced_cards[player_index].add(card_index)  # Mark card index as manually replaced
-            self.locked_cards[player_index].add(card_index)  # Also lock the card index
+            if card_name == "-":
+                self.player_cards[player_index]['cards'][card_index] = "-"
+                self.player_cards[player_index]['confidences'][card_index] = 0.0
+                self.locked_cards[player_index].discard(card_index)
+                self.manually_replaced_cards[player_index].discard(card_index)
+            else:
+                self.player_cards[player_index]['cards'][card_index] = card_name
+                self.player_cards[player_index]['confidences'][
+                    card_index] = 1.0  # Assuming full confidence for manual replacement
+                self.manually_replaced_cards[player_index].add(card_index)  # Mark card index as manually replaced
+                self.locked_cards[player_index].add(card_index)  # Also lock the card index
 
-        print(f"Manually replaced card {card_index} for player {player_index} with {new_card}")
+        print(f"Manually replaced card {card_index} for player {player_index} with {card_name}")
 
         # Update GUI
         self.update_gui()
@@ -363,12 +382,8 @@ class BlackjackLogic:
     def update_dealer_card_display(self, dealer_cards):
         card_value = dealer_cards[0] if dealer_cards else "No card detected"
 
-        if self.dealer_card_label is None:
-            self.dealer_card_label = tk.Label(self.gui)
-            self.dealer_card_label.place(relx=1.0, rely=0.0, x=-10, y=20, anchor='ne')
-
         if card_value != "No card detected":
-            card_image_path = f"{constants.CARD_FOLDER_PATH}/{card_value.lower()}_of_spades.png"
+            card_image_path = f"{constants.CARD_FOLDER_PATH}/{card_value.lower().replace(' ', '_')}.png"
         else:
             card_image_path = constants.DEFAULT_CARD_IMAGE_PATH
 
@@ -380,6 +395,13 @@ class BlackjackLogic:
             self.dealer_card_label.image = imgtk
         except FileNotFoundError:
             print(f"Image file not found: {card_image_path}")
+
+    def create_dealer_card_placeholder(self):
+        placeholder_img = self.get_card_image("default")
+        self.dealer_card_label = tk.Label(self.gui.canvas, image=placeholder_img, bg="white")
+        self.dealer_card_label.image = placeholder_img
+        self.dealer_card_label.place(relx=0.5, rely=0.1, anchor="center")
+        self.dealer_card_label.bind("<Button-1>", lambda e: self.on_dealer_card_click())
 
     def get_card_image(self, card):
         if card == "default":
