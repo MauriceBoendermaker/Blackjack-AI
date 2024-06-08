@@ -48,6 +48,7 @@ class GraphicalUserInterface(tk.Tk):
         self.pbox_gen_button.pack(padx=30, pady=20)  # Increase padding
 
         self.start_button = ttk.Button(self, text="Start", command=self.start)
+        # self.start_button = ttk.Button(self, text="Start")
         self.start_button.pack(pady=30)  # Increase padding
 
         self.round_label = ttk.Label(self, text=f"Round: 000", font=("Helvetica", 14))
