@@ -69,7 +69,7 @@ DECK_COUNT = 8
 # Card dimensions
 CARD_WIDTH = 73
 CARD_HEIGHT = 98
-CARD_SPACING = 25
+CARD_SPACING = 40
 
 # Dealer's card detection area
 DEALER_AREA_LEFT = 1548
