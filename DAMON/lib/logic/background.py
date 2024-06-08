@@ -9,11 +9,11 @@ from .card_utils import CardUtils
 
 class BackgroundProcessor:
     def __init__(self, update_ui_callback, gui):
+        self.gui = gui
         self.update_ui_callback = update_ui_callback
         self.update_queue = queue.Queue()
         self.blackjack_logic = BlackjackLogic(gui)
         self.card_utils = CardUtils()
-        self.gui = gui
 
     def start(self):
         threading.Thread(target=self.background_processing, daemon=True).start()
