@@ -38,7 +38,7 @@ def main():
         detection_thread = threading.Thread(target=start_background_processing, args=(gui,), daemon=True)
         detection_thread.start()
 
-    gui.confirm_button.config(command=lambda: [gui.confirm_monitor_selection(), start_when_ready()])
+    gui.start_button.config(command=lambda: [gui.confirm_monitor_selection(), start_when_ready()])
 
     # Start the main GUI loop
     gui.mainloop()
