@@ -46,20 +46,24 @@ VALUE_MAPPING = {
     "10": 10, "Jack": 10, "Queen": 10, "King": 10, "Ace": 1  # Count Ace as 1 for simplicity
 }
 
-ACTION_MAPPING = {  # No need to map D/H, D/S, P/H and R/H
+ACTION_MAPPING = {
     "H": "Hit",
     "S": "Stand",
-    "D": "Double Down",
+    "D/H": "Double/Hit",
+    "D/S": "Double/Stand",
     "P": "Split",
-    "-": "-"
+    "-": "-",
+    "R/H": "Surrender/Hit"
 }
 
 ACTION_COLORS = {
     "H": "green",
     "S": "blue",
-    "D": "orange",
+    "D/H": "orange",
+    "D/S": "orange",
     "P": "purple",
-    "-": "black"
+    "-": "black",
+    "R/H": "red"
 }
 
 # Misc
