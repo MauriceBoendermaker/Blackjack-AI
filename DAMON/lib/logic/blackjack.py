@@ -8,7 +8,7 @@ import tkinter as tk
 import threading
 
 import cv2
-from PIL import Image, ImageTk, ImageDraw, ImageFont
+from PIL import Image, ImageEnhance, ImageOps, ImageTk, ImageDraw, ImageFont
 
 from ..common import constants, card_mappings
 from .utils import Utils
@@ -82,8 +82,6 @@ class BlackjackLogic:
             else:
                 print(f"Prediction missing coordinates: {prediction}")
 
-        image.save(output_path)
-
     def initialize_screenshot(self):
         self.captured_screenshot = self.monitor_utils.capture_screen()
 
@@ -140,11 +138,20 @@ class BlackjackLogic:
             dealer_card = []
             for prediction in predictions_dealer:
                 class_label = prediction.get('class')
-                card_name = card_mappings.dealer_class_mapping2.get(class_label, "Unknown")
+                card_name = card_mappings.dealer_class_mapping.get(class_label, "Unknown")
                 dealer_card.append(card_name)
 
             # Debug: Print the identified dealer cards
             print(f"Dealer card: {dealer_card}")
+
+            # Update the dealer's card information
+            self.dealer_up_card = dealer_card[0] if dealer_card else "Unknown"
+
+            # Use the updated dealer card in your game logic
+            print(f"Updated dealer's card: {self.dealer_up_card}")
+
+            # Update the dealer card display
+            self.update_dealer_card_display(dealer_card)
 
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
                 temp_file_path = temp_file.name
@@ -455,21 +462,44 @@ class BlackjackLogic:
 
     def update_dealer_card_display(self, dealer_cards):
         if dealer_cards:
-            card_value = dealer_cards[0] if dealer_cards else "No card detected"
-            card_image_path = f"{constants.CARD_FOLDER_PATH}/{card_value.lower().replace(' ', '_')}.png"
+            card_face = dealer_cards[0]  # Get the face value (e.g., '2', 'Q')
+            card_image_path = None
+
+            # Check for the existence of any card with the given face value
+            for suit in ['hearts', 'diamonds', 'spades', 'clubs']:  # Assuming suits are named like this
+                potential_path = f"{constants.CARD_FOLDER_PATH}/{card_face.lower()}_of_{suit}.png"
+                if os.path.exists(potential_path):
+                    card_image_path = potential_path
+                    break
+
+            if card_image_path is None:
+                card_value = "No card detected"
+                card_image_path = constants.DEFAULT_CARD_IMAGE_PATH
+            else:
+                card_value = card_face
         else:
             card_value = "No card detected"
             card_image_path = constants.DEFAULT_CARD_IMAGE_PATH
 
+        # Debug: Print the image path being used
+        print(f"Card image path: {card_image_path}")
+
         try:
             img = Image.open(card_image_path)
             img = img.resize((100, 150))
+
+            # Apply green color filter
+            img = img.convert("L")  # Convert to grayscale
+            img = ImageOps.colorize(img, black="grey", white="white")
+
             imgtk = ImageTk.PhotoImage(image=img)
             self.dealer_card_label.config(image=imgtk)
             self.dealer_card_label.image = imgtk
             print(f"Dealer card display updated with: {card_value}")  # Debug print
         except FileNotFoundError:
             print(f"Image file not found: {card_image_path}")
+        except Exception as e:
+            print(f"Error updating dealer card display: {e}")
 
     def create_dealer_card_placeholder(self):
         placeholder_img = self.get_card_image("default")
