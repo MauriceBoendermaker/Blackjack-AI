@@ -109,8 +109,8 @@ dealer_class_mapping = {
     "ed12": "Queen of Clubs",
     "ed13": "King of Clubs",
     # Misc - Assuming these might be incorrect class labels or not directly mapping to specific cards
-    "10": "misc",
-    "9": "misc",
+    # "10": "misc",
+    # "9": "misc",
     "C6": "misc",
     "b87": "misc",
     "c7-": "misc",
@@ -121,6 +121,20 @@ dealer_class_mapping = {
     "gfg": "misc",
     "gg": "misc",
     "gg-": "misc",
+    #
+    "2": "2",
+    "3": "3",
+    "4": "4",
+    "5": "5",
+    "6": "6",
+    "7": "7",
+    "8": "8",
+    "9": "9",
+    "10": "10",
+    "J": "Jack",
+    "Q": "Queen",
+    "K": "King",
+    "A": "Ace",
 }
 
 # Dictionary mapping class IDs to card types for the dealer
