@@ -42,8 +42,19 @@ CSV_FILE_PATH = "lib/Blackjack cheat sheet table.csv"
 CARD_VALUES = ["Ace", "10", "9", "8", "7", "6", "5", "4", "3", "2"]
 
 VALUE_MAPPING = {
-    "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9,
-    "10": 10, "Jack": 10, "Queen": 10, "King": 10, "Ace": 1  # Count Ace as 1 for simplicity
+    '2': 2,
+    '3': 3,
+    '4': 4,
+    '5': 5,
+    '6': 6,
+    '7': 7,
+    '8': 8,
+    '9': 9,
+    '10': 10,
+    'Jack': 10,
+    'Queen': 10,
+    'King': 10,
+    'Ace': 1  # Ace can be 1 or 11, but typically counted as 1 for simplicity
 }
 
 ACTION_MAPPING = {
