@@ -1,4 +1,4 @@
-VERSION = "1.7"
+VERSION = "1.8"
 TITLE = f"Blackjack AI - v{VERSION}"
 SIZE = "1200x800"
 RESOLUTION = "2560x1440"
