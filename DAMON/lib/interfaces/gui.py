@@ -1,5 +1,6 @@
 import screeninfo
 import tkinter as tk
+import threading
 from tkinter import ttk, messagebox
 
 from ..common import constants
@@ -49,6 +50,10 @@ class GraphicalUserInterface(tk.Tk):
 
         self.start_button = ttk.Button(self, text="Start", command=self.start)
         self.start_button.pack(pady=30)  # Increase padding
+
+        # Add the reset button for a new round
+        self.reset_button = ttk.Button(self, text="Reset Round", command=self.reset_round)
+        self.reset_button.pack(pady=10)
 
         self.round_label = ttk.Label(self, text=f"Round: 000", font=("Helvetica", 14))
         self.round_label.place(x=10, y=5)
@@ -112,6 +117,18 @@ class GraphicalUserInterface(tk.Tk):
             self.background_processor = BackgroundProcessor(self.update_ui_callback, self)
             self.background_processor.blackjack_logic.set_monitor(self.monitor_utils.monitor)
         self.background_processor.start()
+
+    def reset_round(self):
+        if self.background_processor and self.background_processor.blackjack_logic:
+            threading.Thread(target=self.run_reset_process, daemon=True).start()
+
+    def run_reset_process(self):
+        self.background_processor.blackjack_logic.reset_for_new_round()
+        self.gui_reset_update()
+
+    def gui_reset_update(self):
+        self.background_processor.blackjack_logic.reset_gui_elements()
+        self.update_ui_callback()
 
     def update_ui_callback(self):
         self.background_processor.update_gui_from_queue()
