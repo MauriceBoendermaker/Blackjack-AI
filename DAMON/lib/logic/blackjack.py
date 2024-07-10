@@ -198,6 +198,7 @@ class BlackjackLogic:
 
         if best_card:
             detected_card = best_card
+            self.card_handler.handle_card_detection(detected_card['card_name'])  # Ensure this is called
             print(f"Detected card for player {player_index} in state {state}: {detected_card}")
 
             if state == BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD:
@@ -218,8 +219,7 @@ class BlackjackLogic:
         if not self.card_utils.is_duplicate_or_nearby_card(detected_card, self.player_cards[player_index]['cards']):
             self.card_handler.add_or_update_player_card(detected_card, self.player_cards[player_index],
                                                         detected_card['card_name'])
-            self.card_handler.print_all_cards(self.player_cards,
-                                              self.card_utils.card_counters)  # Update and print cards info
+            self.card_handler.print_all_cards(self.player_cards)  # Update and print cards info
             self.update_gui()  # Ensure the GUI is updated
 
     def update_if_higher_confidence(self, player_index, detected_card):
@@ -228,7 +228,7 @@ class BlackjackLogic:
                 min(self.player_cards[player_index]['confidences']))
             self.player_cards[player_index]['cards'][replace_index] = detected_card['card_name']
             self.player_cards[player_index]['confidences'][replace_index] = detected_card['confidence']
-            self.card_handler.print_all_cards(self.player_cards, self.card_utils.card_counters)
+            self.card_handler.print_all_cards(self.player_cards)
 
     def blackjack_decision(self, player_cards, dealer_up_card, true_count, base_bet):
         self.recommendations.clear()  # Clear previous recommendations
@@ -307,7 +307,7 @@ class BlackjackLogic:
                     player_data['recommendation'] = decision_recommendations
                     self.card_utils.print_player_cards(player_index, cards, decision_recommendations)
 
-            self.players_cards_data.append({'player_index': player_index, 'cards': cards})
+                self.players_cards_data.append({'player_index': player_index, 'cards': cards})
 
         self.update_player_cards_display(self.players_cards_data, dealer_up_card, self.card_utils.true_count,
                                          constants.BASE_BET)
@@ -330,12 +330,10 @@ class BlackjackLogic:
                 card_info.append(f"[{i}] {card} (C: {conf * 100:.2f}%)")
 
             self.cards_info.append(f"P{player_index + 1}: {' // '.join(card_info)}")
-            print(f"P{player_index + 1}: {' // '.join(card_info)}")
+            print(f"P{player_index + 1}: {' ///// '.join(card_info)}")
 
-        formatted_card_counts = [f"{value} => {count}x" for value, count in
-                                 sorted(self.card_value_counts.items(), key=lambda item: item[0])]
-        total_cards = sum(self.card_value_counts.values())
-        print(f"Card counts ({total_cards}):\n", "\n".join(formatted_card_counts))
+        # Use the card_utils method to print card counts
+        self.card_utils.print_card_counts()
 
     def update_player_cards_display(self, player_data_list, dealer_up_card, true_count, base_bet):
         self.clear_player_cards()
@@ -373,6 +371,11 @@ class BlackjackLogic:
                 "-", "black")
             self.create_colored_labels(f"Decision: ", decision[0], decision[1], start_x + column_width // 2,
                                        card_display_y + 5, "n")
+
+            # Fetch and display the second recommendation
+            second_recommendation, second_value = self.fetch_second_recommendation(cards, dealer_up_card)
+            self.create_colored_labels(f"Second Decision: ", second_recommendation, "blue", start_x + column_width // 2,
+                                       card_display_y + 35, "n")
 
     def create_colored_labels(self, prefix, text, color, x, y, anchor="n"):
         player_number = int(
@@ -537,6 +540,16 @@ class BlackjackLogic:
         self.player_cards.clear()
         self.players_cards_data.clear()
 
+        self.first_card_detected.clear()
+        self.second_card_detected.clear()
+        self.card_value_counts.clear()
+        self.players_received_first_card.clear()
+        self.card_utils.counted_cards_this_round.clear()
+
+        self.round_count += 1
+        print("Reset for new round.")
+
+    def reset_gui_elements(self):
         empty_image = tk.PhotoImage()
         for label in self.player_cards_labels:
             label.config(image=empty_image)
@@ -546,18 +559,11 @@ class BlackjackLogic:
             self.dealer_card_label.config(image=empty_image)
             self.dealer_card_label.image = empty_image
 
-        for decision_label in self.players_decision_labels:
-            decision_label.config(text="")
+        for player_index in self.players_decision_labels:
+            for label in self.players_decision_labels[player_index]:
+                label.config(text="")
 
-        self.round_count += 1
         self.gui.round_label.config(text=f"Round: {self.round_count}")
-
-        self.first_card_detected.clear()
-        self.second_card_detected.clear()
-        self.card_value_counts.clear()
-        self.players_received_first_card.clear()
-        self.card_utils.counted_cards_this_round.clear()
-        print("Reset for new round.")
 
     def clear_player_cards(self):
         with self.lock:

@@ -13,15 +13,22 @@ class CardHandler:
         self.card_utils = CardUtils()
 
     def handle_card_detection(self, card_name):
-        # Simplify the card name to its basic value for counting purposes
-        card_key = card_name.split(' ')[0]
-        if card_key in ["Jack", "Queen", "King"]:  # Normalize face cards to "10"
-            card_key = "10"
+        if isinstance(card_name, int):
+            card_value = card_name
+        else:
+            card_value = self.card_utils.get_card_value(card_name)
 
-        # Check if this card (in its simplified form) has already been counted in this round
-        if card_key not in self.card_utils.counted_cards_this_round:
-            self.card_utils.update_card_counter(card_key, 1)  # Update the counter for this card
-            self.card_utils.counted_cards_this_round.add(card_key)  # Mark this card as counted for the current round
+        self.card_utils.update_count(card_name)
+        self.card_utils.print_card_counts()
+
+    def convert_int_to_card_name(self, value):
+        # Example conversion logic; customize as needed
+        if value == 11:
+            return "Ace"
+        elif value <= 10:
+            return str(value)
+        else:
+            return "Unknown"
 
     def capture_dealer_cards(self, image, model):
         # Save the cropped image for debugging
@@ -43,7 +50,7 @@ class CardHandler:
 
         return self.dealer_cards
 
-    def print_all_cards(self, player_cards, card_value_counts):
+    def print_all_cards(self, player_cards):
         self.cards_info.clear()  # Clear previous card info
         for player_index in sorted(player_cards):
             cards = player_cards[player_index]['cards']
@@ -56,10 +63,8 @@ class CardHandler:
             self.cards_info.append(f"P{player_index + 1}: {' // '.join(card_info)}")
             print(f"P{player_index + 1}: {' // '.join(card_info)}")
 
-        formatted_card_counts = [f"{value} => {count}x" for value, count in
-                                 sorted(card_value_counts.items(), key=lambda item: item[0])]
-        total_cards = sum(card_value_counts.values())  # Sum up the counts of all cards for the total
-        print(f"Card counts ({total_cards}):\n", "\n".join(formatted_card_counts))
+        # Print card counts using the method from CardUtils
+        self.card_utils.print_card_counts()
 
     def add_or_update_player_card(self, detected_card, player_info, card_name):
         if "-" in player_info['cards']:
@@ -71,4 +76,5 @@ class CardHandler:
             player_info['confidences'].append(detected_card['confidence'])
 
         print(f"Player {player_info} card updated: {player_info['cards']}")
-        # self.update_gui()  # Ensure the GUI is updated
+        self.card_utils.update_count(card_name)  # Ensure card count is updated for each detected card
+        self.card_utils.print_card_counts()  # Print updated card counts
