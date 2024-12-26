@@ -6,6 +6,7 @@ import tempfile
 from tkinter import font
 import tkinter as tk
 import threading
+import requests
 
 import cv2
 from PIL import Image, ImageEnhance, ImageOps, ImageTk, ImageDraw, ImageFont
@@ -51,6 +52,14 @@ class BlackjackLogic:
         self.players_received_first_card = set()
         self.utils = Utils()
         self.card_handler = CardHandler()
+
+        # Test various card inputs
+        # test_cards = ["Ace of Clubs", "3 of Diamonds", "Jack of Hearts", "9 of Spades", "King of Diamonds"]
+        # for card in test_cards:
+        #     self.card_handler.handle_card_detection(card)
+        #
+        # self.card_handler.card_utils.print_card_counts()
+
         self.card_utils = CardUtils()
         self.monitor_utils = MonitorUtils()
         self.decision_making = DecisionMaking()
@@ -66,6 +75,61 @@ class BlackjackLogic:
         self.player_regions = []
         self.detection_states = defaultdict(
             lambda: BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD)  # Track detection states for each player
+
+    def fetch_second_recommendation(self, player_cards, dealer_card):
+        # Map cards to URL parameters
+        card_count = {'2': 0, '3': 0, '4': 0, '5': 0, '6': 0, '7': 0, '8': 0, '9': 0, '10': 0, 'J': 0, 'Q': 0, 'K': 0,
+                      'A': 0}
+        for card in player_cards:
+            card_value = card.split(' ')[0]
+            if card_value in card_count:
+                card_count[card_value] += 1
+            elif card_value in ["Jack", "Queen", "King"]:
+                card_count['10'] += 1
+
+        url_params = {
+            'a': card_count['2'],
+            'b': card_count['3'],
+            'c': card_count['4'],
+            'd': card_count['5'],
+            'e': card_count['6'],
+            'f': card_count['7'],
+            'g': card_count['8'],
+            'h': card_count['9'],
+            'i': card_count['10'],
+            'j': card_count['A'],
+            'k': 0,
+            'l': 1.5,
+            'm': 1,
+            'n': 1,
+            'o': 0,
+            'p': 1,
+            'q': 1,
+            'r': 0,
+            's': 0,
+            't': 1,
+            'u': 6,
+            'v': 44
+        }
+
+        url = "https://wizardofodds.com/calculators-js/blackjack/calculate/"
+        response = requests.get(url, params=url_params)
+        data = response.json()
+
+        if data['Error']:
+            return None, "Error fetching recommendation"
+
+        recommendations = {
+            "Surrender": data.get("Surrender", 0),
+            "Stand": data.get("Stand", 0),
+            "Hit": data.get("Hit", 0),
+            "Double": data.get("Double", 0),
+            "Split": data.get("Split", 0)
+        }
+
+        # Find the best recommendation
+        best_recommendation = max(recommendations, key=recommendations.get)
+        return best_recommendation, recommendations[best_recommendation]
 
     def draw_predictions(self, image, predictions, output_path):
         draw = ImageDraw.Draw(image)
