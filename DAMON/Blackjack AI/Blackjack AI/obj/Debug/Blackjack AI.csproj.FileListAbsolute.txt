@@ -1,0 +1,13 @@
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\obj\Debug\Blackjack AI.csproj.AssemblyReference.cache
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\obj\Debug\Blackjack_AI.Properties.Resources.resources
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\obj\Debug\Blackjack AI.csproj.GenerateResource.cache
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\obj\Debug\Blackjack AI.csproj.CoreCompileInputs.cache
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\bin\Debug\Blackjack AI.exe.config
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\bin\Debug\Blackjack AI.exe
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\bin\Debug\Blackjack AI.pdb
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\bin\Debug\Newtonsoft.Json.dll
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\bin\Debug\Newtonsoft.Json.xml
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\obj\Debug\BlackjackAI.Form1.resources
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\obj\Debug\Blackjac.D27F71C8.Up2Date
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\obj\Debug\Blackjack AI.exe
+I:\Documents (M.2 SSD)\python\Blackjack-AI\DAMON\Blackjack AI\Blackjack AI\obj\Debug\Blackjack AI.pdb
