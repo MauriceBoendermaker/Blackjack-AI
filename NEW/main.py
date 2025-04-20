@@ -32,7 +32,6 @@ def main():
     print(f"Starting {constants.TITLE}")
     gui = init_gui()
 
-    # Start background processing in a separate thread after monitor is confirmed
     def start_when_ready():
         gui.start()
         detection_thread = threading.Thread(target=start_background_processing, args=(gui,), daemon=True)
@@ -40,7 +39,6 @@ def main():
 
     gui.start_button.config(command=lambda: [gui.confirm_monitor_selection(), start_when_ready()])
 
-    # Start the main GUI loop
     gui.mainloop()
 
 
