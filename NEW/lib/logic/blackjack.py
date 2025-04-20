@@ -69,18 +69,27 @@ class BlackjackLogic:
         self.detection_states = defaultdict(
             lambda: BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD)
         self.player_decisions = {}
+        self.card_image_cache = {}
+        self.default_card_imgtk = None
+
+        try:
+            default_img = Image.open(constants.DEFAULT_CARD_IMAGE_PATH).resize((60, 90))
+            self.default_card_imgtk = ImageTk.PhotoImage(default_img)
+        except Exception as e:
+            print(f"Failed to load default image: {e}")
 
     def fetch_second_recommendation(self, player_cards, dealer_card):
-        card_count = {'2': 0, '3': 0, '4': 0, '5': 0, '6': 0, '7': 0, '8': 0, '9': 0, '10': 0, 'J': 0, 'Q': 0, 'K': 0,
-                      'A': 0}
+        card_count = {'2': 0, '3': 0, '4': 0, '5': 0, '6': 0, '7': 0, '8': 0, '9': 0,
+                      '10': 0, 'J': 0, 'Q': 0, 'K': 0, 'A': 0}
+
         for card in player_cards:
-            card_value = card.split(' ')[0]
-            if card_value in card_count:
-                card_count[card_value] += 1
-            elif card_value in ["Jack", "Queen", "King"]:
+            value = card.split(' ')[0]
+            if value in card_count:
+                card_count[value] += 1
+            elif value in ["Jack", "Queen", "King"]:
                 card_count['10'] += 1
 
-        url_params = {
+        params = {
             'a': card_count['2'],
             'b': card_count['3'],
             'c': card_count['4'],
@@ -92,36 +101,35 @@ class BlackjackLogic:
             'i': card_count['10'],
             'j': card_count['A'],
             'k': 0,
-            'l': 1.5,
-            'm': 1,
-            'n': 1,
-            'o': 0,
-            'p': 1,
-            'q': 1,
-            'r': 0,
-            's': 0,
-            't': 1,
-            'u': 6,
-            'v': 44
+            'l': 1.5, 'm': 1, 'n': 1, 'o': 0,
+            'p': 1, 'q': 1, 'r': 0, 's': 0, 't': 1,
+            'u': 6,  # number of decks
+            'v': 44  # total cards dealt so far (update later if needed)
         }
 
-        url = "https://wizardofodds.com/calculators-js/blackjack/calculate/"
-        response = requests.get(url, params=url_params)
-        data = response.json()
+        try:
+            response = requests.get("https://wizardofodds.com/calculators-js/blackjack/calculate/", params=params)
+            data = response.json()
+        except Exception as e:
+            print(f"API fetch failed: {e}")
+            return "Error", {}
 
-        if data['Error']:
-            return None, "Error fetching recommendation"
+        if data.get("Error"):
+            return "Error", {}
 
-        recommendations = {
-            "Surrender": data.get("Surrender", 0),
-            "Stand": data.get("Stand", 0),
-            "Hit": data.get("Hit", 0),
-            "Double": data.get("Double", 0),
-            "Split": data.get("Split", 0)
+        actions = ["Surrender", "Stand", "Hit", "Double", "Split"]
+        available_actions = {
+            action: data[action]
+            for action in actions
+            if data.get(f"Has{action}", False)
         }
 
-        best_recommendation = max(recommendations, key=recommendations.get)
-        return best_recommendation, recommendations[best_recommendation]
+        if not available_actions:
+            return "No action", {}
+
+        sorted_actions = sorted(available_actions.items(), key=lambda x: x[1], reverse=True)
+        best_action, best_ev = sorted_actions[0]
+        return f"{best_action} ({best_ev:.3f})", dict(sorted_actions)
 
     def draw_predictions(self, image, predictions, output_path):
         draw = ImageDraw.Draw(image)
@@ -458,9 +466,16 @@ class BlackjackLogic:
             self.create_colored_labels("", decision[0], decision[1], start_x + column_width // 2,
                                        card_display_y + 5, "n")
 
-            second_recommendation, _ = self.fetch_second_recommendation(cards, dealer_up_card)
-            self.create_second_decision_label(second_recommendation, start_x + column_width // 2, card_display_y + 35,
+            self.create_second_decision_label("Loading...", start_x + column_width // 2, card_display_y + 35,
                                               player_number)
+
+            def fetch_and_display():
+                second_recommendation, _ = self.fetch_second_recommendation(cards, dealer_up_card)
+                self.gui.after(0, lambda: self.create_second_decision_label(second_recommendation,
+                                                                            start_x + column_width // 2,
+                                                                            card_display_y + 35, player_number))
+
+            threading.Thread(target=fetch_and_display, daemon=True).start()
 
     def create_colored_labels(self, prefix, text, color, x, y, anchor="n"):
         player_number = int(x // (constants.CARD_WIDTH + constants.CARD_SPACING))
@@ -501,59 +516,83 @@ class BlackjackLogic:
         selection_window = tk.Toplevel(self.gui)
         selection_window.title("Select Card")
 
-        available_cards = self.card_utils.get_all_card_names()
+        suits_order = ['Spades', 'Hearts', 'Diamonds', 'Clubs']
+        suit_cards = {suit: [] for suit in suits_order}
 
-        for i, card in enumerate(available_cards):
-            card_image_path = self.utils.generate_card_image_path(card)
+        for card in self.card_utils.get_all_card_names():
             try:
-                img = Image.open(card_image_path)
-                img = img.resize((60, 90))
-                imgtk = ImageTk.PhotoImage(image=img)
-                card_button = tk.Button(selection_window, image=imgtk,
-                                        command=lambda c=card: self.replace_card(player_index, card_index, c))
-                card_button.image = imgtk
-                card_button.grid(row=i // 10, column=i % 10)
-            except FileNotFoundError:
-                print(f"Image file not found: {card_image_path}")
+                suit = card.split(" of ")[1]
+                if suit in suit_cards:
+                    suit_cards[suit].append(card)
+            except IndexError:
+                continue
 
-        default_img = Image.open(constants.DEFAULT_CARD_IMAGE_PATH).resize((60, 90))
-        default_imgtk = ImageTk.PhotoImage(image=default_img)
-        default_button = tk.Button(selection_window, image=default_imgtk,
-                                   command=lambda: self.replace_card(player_index, card_index, "-"))
-        default_button.image = default_imgtk
-        default_button.grid(row=len(available_cards) // 10, column=0)
+        for row_index, suit in enumerate(suits_order):
+            for col_index, card in enumerate(suit_cards[suit]):
+                imgtk = self.get_cached_card_image(card)
+                if imgtk:
+                    card_button = tk.Button(selection_window, image=imgtk,
+                                            command=lambda c=card: self.replace_card(player_index, card_index, c))
+                    card_button.image = imgtk
+                    card_button.grid(row=row_index, column=col_index)
+
+        if self.default_card_imgtk:
+            default_button = tk.Button(selection_window, image=self.default_card_imgtk,
+                                       command=lambda: self.replace_card(player_index, card_index, "-"))
+            default_button.image = self.default_card_imgtk
+            default_button.grid(row=len(suits_order), column=0)
 
     def replace_card(self, player_index, card_index, card_name):
-        if player_index == "dealer":
+        for widget in self.gui.winfo_children():
+            if isinstance(widget, tk.Toplevel):
+                widget.destroy()
+
+        def do_replacement():
+            if player_index == "dealer":
+                if card_name == "-":
+                    self.dealer_up_card = None
+                    self.gui.after(0, lambda: self.update_dealer_card_display([]))
+                else:
+                    normalized_card = self.card_utils.get_dealer_card_value(card_name.split(' ')[0])
+                    self.dealer_up_card = normalized_card
+                    self.gui.after(0, lambda: self.update_dealer_card_display([card_name]))
+                print(f"Dealer card replaced with: {self.dealer_up_card}")
+                return
+
+            player = self.player_cards[player_index]
             if card_name == "-":
-                self.dealer_up_card = None
-                self.update_dealer_card_display([])
-            else:
-                normalized_card_name = self.card_utils.get_dealer_card_value(card_name.split(' ')[0])
-                self.dealer_up_card = normalized_card_name
-                self.update_dealer_card_display([card_name])
-            print(
-                f"Dealer card replaced with: {self.dealer_up_card} (normalized: {normalized_card_name})")  # Debug print
-        else:
-            if card_name == "-":
-                self.player_cards[player_index]['cards'][card_index] = "-"
-                self.player_cards[player_index]['confidences'][card_index] = 0.0
+                player['cards'][card_index] = "-"
+                player['confidences'][card_index] = 0.0
                 self.locked_cards[player_index].discard(card_index)
                 self.manually_replaced_cards[player_index].discard(card_index)
             else:
-                self.player_cards[player_index]['cards'][card_index] = card_name
-                self.player_cards[player_index]['confidences'][
-                    card_index] = 1.0
+                player['cards'][card_index] = card_name
+                player['confidences'][card_index] = 1.0
                 self.manually_replaced_cards[player_index].add(card_index)
                 self.locked_cards[player_index].add(card_index)
 
             print(f"Manually replaced card {card_index} for player {player_index} with {card_name}")
 
-        self.update_gui()
+            def finish_update():
+                self.update_gui()
 
-        for widget in self.gui.winfo_children():
-            if isinstance(widget, tk.Toplevel):
-                widget.destroy()
+            # Optional: sleep to smooth things out (remove if not needed)
+            time.sleep(0.05)
+
+            self.gui.after(0, finish_update)
+
+        threading.Thread(target=do_replacement, daemon=True).start()
+
+    def refresh_player_card_image(self, player_index, card_index, card_name):
+        try:
+            photo_img = self.get_card_image(card_name)
+            label_index = player_index * 2 + card_index
+            if 0 <= label_index < len(self.player_cards_labels):
+                card_label = self.player_cards_labels[label_index]
+                card_label.config(image=photo_img)
+                card_label.image = photo_img
+        except Exception as e:
+            print(f"Failed to refresh card image: {e}")
 
     def update_dealer_card_display(self, dealer_cards):
         if dealer_cards:
@@ -663,3 +702,17 @@ class BlackjackLogic:
                 label.destroy()
 
             self.recommendations.clear()
+
+    def get_cached_card_image(self, card_name):
+        if card_name in self.card_image_cache:
+            return self.card_image_cache[card_name]
+
+        try:
+            card_image_path = self.utils.generate_card_image_path(card_name)
+            img = Image.open(card_image_path).resize((60, 90))
+            imgtk = ImageTk.PhotoImage(img)
+            self.card_image_cache[card_name] = imgtk
+            return imgtk
+        except Exception as e:
+            print(f"Failed to load image for {card_name}: {e}")
+            return None
