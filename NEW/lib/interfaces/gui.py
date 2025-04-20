@@ -11,28 +11,26 @@ from ..player_boxes import generator as pbox_generator
 
 
 class GraphicalUserInterface(tk.Tk):
-    """
-    Class for our graphical user interface for BlackJack AI
-    """
+    # Class for graphical user interface for BlackJack AI
 
     def __init__(self):
         super().__init__()
         self.title(constants.TITLE)
         self.geometry(constants.SIZE)
-        self.resizable(False, False)  # Prevent window resizing
+        self.resizable(False, False)
 
         self.reset_button = None
         self.background_processor = None
 
-        self.player_decision_labels = {}  # key = player number
-        self.last_decision_states = {}  # For comparing previous values
+        self.player_decision_labels = {}
+        self.last_decision_states = {}
 
         self.pbox_generator = pbox_generator.PlayerBoxGenerator(self)
-        self.monitor_utils = MonitorUtils()  # Initialize MonitorUtils instance
+        self.monitor_utils = MonitorUtils()
 
         self.monitor_var = tk.StringVar()
         self.monitor_selection_frame = ttk.Frame(self)
-        self.monitor_selection_frame.pack(padx=30, pady=20)  # Increase padding
+        self.monitor_selection_frame.pack(padx=30, pady=20)
         self.monitor_label = ttk.Label(self.monitor_selection_frame, text="Select Monitor:")
         self.monitor_label.pack(side=tk.LEFT)
         self.monitor_combo = ttk.Combobox(self.monitor_selection_frame, textvariable=self.monitor_var, state="readonly")
@@ -50,29 +48,27 @@ class GraphicalUserInterface(tk.Tk):
 
         self.pbox_gen_button = ttk.Button(self, text="Generate Player Boxes", command=self.pbox_generator.generate,
                                           state=tk.DISABLED)
-        self.pbox_gen_button.pack(padx=30, pady=20)  # Increase padding
+        self.pbox_gen_button.pack(padx=30, pady=20)
 
         self.start_button = ttk.Button(self, text="Start", command=self.start)
-        self.start_button.pack(pady=30)  # Increase padding
+        self.start_button.pack(pady=30)
 
-        # Add the reset button for a new round
         self.reset_button = ttk.Button(self, text="Reset Round", command=self.reset_round)
         self.reset_button.pack(pady=10)
 
-        self.round_label = ttk.Label(self, text=f"Round: 000", font=("Helvetica", 14))
+        self.round_label = ttk.Label(self, text=f"Round: 0", font=("Helvetica", 14))
         self.round_label.place(x=10, y=5)
 
         self.dealer_value_label = ttk.Label(self, text="Dealer has: ", font=("Helvetica", 14))
-        self.dealer_value_label.place(relx=1.0, rely=0.0, x=-50, y=0,
-                                      anchor='ne')  # Adjusted for top-right with padding
+        self.dealer_value_label.place(relx=1.0, rely=0.0, x=-50, y=0, anchor='ne')
 
         self.canvas = tk.Canvas(self, bg="#ffffff")
-        self.canvas.pack(fill=tk.BOTH, expand=True, padx=30, pady=20)  # Increase padding
+        self.canvas.pack(fill=tk.BOTH, expand=True, padx=30, pady=20)
 
         self.draw_canvas()
         self.populate_monitors()
 
-        self.bind("<Configure>", self.on_resize)  # Bind the resize event
+        self.bind("<Configure>", self.on_resize)
 
     def draw_canvas(self):
         self.canvas.create_rectangle(50, 50, 200, 100, fill="black", outline="white")
@@ -109,20 +105,16 @@ class GraphicalUserInterface(tk.Tk):
             if self.last_decision_states.get(player_num) != key:
                 self.last_decision_states[player_num] = key
 
-                # Remove previous label if it exists
                 if player_num in self.player_decision_labels:
                     for label in self.player_decision_labels[player_num]:
                         label.destroy()
 
-                # Create new labels
                 decision_label = tk.Label(self.canvas, text=f"{decisions['decision']}", fg="green",
                                           font=("Helvetica", 12, "bold"))
                 second_label = tk.Label(self.canvas, text=f"Optimal: {decisions['second']}", fg="blue",
                                         font=("Helvetica", 10, "bold"))
 
-                # Position labels near the player boxes
                 x = 50 + (player_num - 1) * (constants.CARD_WIDTH + constants.CARD_SPACING)
-                y = 300  # Adjust Y to where your player boxes are
 
                 self.canvas.create_window(x, y, anchor="nw", window=decision_label)
                 self.canvas.create_window(x, y + 25, anchor="nw", window=second_label)
