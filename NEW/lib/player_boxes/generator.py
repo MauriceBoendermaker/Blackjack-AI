@@ -6,8 +6,8 @@ from PIL import Image, ImageTk
 from tkinter import messagebox
 
 from ..common import constants
-from ..logic.monitor_utils import MonitorUtils
 from ..logic.utils import Utils
+from ..logic.monitor_utils import MonitorUtils
 
 
 class PlayerBoxGenerator:
