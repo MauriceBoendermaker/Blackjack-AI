@@ -1,12 +1,13 @@
+import threading
 import screeninfo
 import tkinter as tk
-import threading
+
 from tkinter import ttk, messagebox
 
 from ..common import constants
-from ..player_boxes import generator as pbox_generator
 from ..logic.monitor_utils import MonitorUtils
 from ..logic.background import BackgroundProcessor
+from ..player_boxes import generator as pbox_generator
 
 
 class GraphicalUserInterface(tk.Tk):
@@ -22,6 +23,9 @@ class GraphicalUserInterface(tk.Tk):
 
         self.reset_button = None
         self.background_processor = None
+
+        self.player_decision_labels = {}  # key = player number
+        self.last_decision_states = {}  # For comparing previous values
 
         self.pbox_generator = pbox_generator.PlayerBoxGenerator(self)
         self.monitor_utils = MonitorUtils()  # Initialize MonitorUtils instance
@@ -99,6 +103,32 @@ class GraphicalUserInterface(tk.Tk):
         self.resolution_var.set(resolution_text)
         self.pbox_gen_button.config(state=tk.NORMAL)
 
+    def update_player_decision_labels(self, player_decisions):
+        for player_num, decisions in player_decisions.items():
+            key = f"{decisions['decision']}|{decisions['second']}"
+            if self.last_decision_states.get(player_num) != key:
+                self.last_decision_states[player_num] = key
+
+                # Remove previous label if it exists
+                if player_num in self.player_decision_labels:
+                    for label in self.player_decision_labels[player_num]:
+                        label.destroy()
+
+                # Create new labels
+                decision_label = tk.Label(self.canvas, text=f"{decisions['decision']}", fg="green",
+                                          font=("Helvetica", 12, "bold"))
+                second_label = tk.Label(self.canvas, text=f"Optimal: {decisions['second']}", fg="blue",
+                                        font=("Helvetica", 10, "bold"))
+
+                # Position labels near the player boxes
+                x = 50 + (player_num - 1) * (constants.CARD_WIDTH + constants.CARD_SPACING)
+                y = 300  # Adjust Y to where your player boxes are
+
+                self.canvas.create_window(x, y, anchor="nw", window=decision_label)
+                self.canvas.create_window(x, y + 25, anchor="nw", window=second_label)
+
+                self.player_decision_labels[player_num] = [decision_label, second_label]
+
     def on_resize(self, event):
         if hasattr(self.pbox_generator, 'current_image_path') and self.pbox_generator.current_image_path:
             self.pbox_generator._display_image(self.pbox_generator.current_image_path)
@@ -131,4 +161,7 @@ class GraphicalUserInterface(tk.Tk):
         self.update_ui_callback()
 
     def update_ui_callback(self):
-        self.background_processor.update_gui_from_queue()
+        if self.background_processor:
+            logic = self.background_processor.blackjack_logic
+            decisions = logic.get_current_player_decisions()
+            self.update_player_decision_labels(decisions)

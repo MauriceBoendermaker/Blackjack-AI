@@ -1,10 +1,10 @@
+import time
 import queue
 import threading
-import time
 
-from .blackjack import BlackjackLogic
 from ..common import constants
 from .card_utils import CardUtils
+from .blackjack import BlackjackLogic
 
 
 class BackgroundProcessor:
@@ -23,7 +23,7 @@ class BackgroundProcessor:
         while True:
             self.blackjack_logic.capture_screen_and_track_cards()
             self.update_ui_callback()
-            time.sleep(0.1)  # Add a short delay to avoid rapid flickering
+            time.sleep(0.5)  # Add a short delay to avoid rapid flickering
             self.blackjack_logic.capture_screen_and_track_cards()
             self.update_queue.put("update")
 
@@ -32,19 +32,13 @@ class BackgroundProcessor:
             data = self.update_queue.get_nowait()
             if data == "update":
                 self.update_ui_callback()
-        self.gui.after(100, self.check_for_updates)
+        self.gui.after(500, self.check_for_updates)
 
     def update_gui_from_queue(self):
         try:
             while not self.update_queue.empty():
                 data = self.update_queue.get_nowait()
-                if isinstance(data, dict):
-                    if 'dealer_card' in data:
-                        self.blackjack_logic.update_dealer_card_display(data['dealer_card'])
-                    elif 'players_cards' in data:
-                        self.blackjack_logic.update_player_cards_display(data['players_cards'],
-                                                                         self.blackjack_logic.dealer_up_card,
-                                                                         self.card_utils.calculate_true_count(),
-                                                                         constants.BASE_BET)
+                if data == "update":
+                    self.update_ui_callback()
         finally:
-            self.gui.after(100, self.update_gui_from_queue)
+            self.gui.after(100, self.update_gui_from_queue)  # Keep the interval reasonable
