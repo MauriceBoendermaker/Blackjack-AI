@@ -3,7 +3,8 @@ from ..common.card_mappings import class_mapping
 
 
 class CardUtils:
-    def __init__(self):
+    def __init__(self, gui=None):
+        self.gui = gui
         self.true_count = 0
         self.hand_value = None
         self.card_counter_labels = {}
@@ -21,35 +22,73 @@ class CardUtils:
         return [f"{value} of {suit}" for suit in suits for value in values]
 
     def update_count(self, card_name):
+        card_value_name = card_name.split(' ')[0]
+        print(f"[update_count] base: {card_value_name}")  # Debug print
+
         card_value = self.get_card_value(card_name)
         if card_value == 0:
             return
+
+        # Apply running count rules
         if 2 <= card_value <= 6:
             self.running_count += 1
         elif card_value in [10, 11]:
             self.running_count -= 1
-        card_key = '10' if card_value >= 10 else str(card_value)
+
+        if card_value_name == "Ace":
+            card_key = "Ace"
+        elif card_value_name in ["Jack", "Queen", "King"]:
+            card_key = "10"
+        else:
+            card_key = card_value_name
+
         self.card_counters[card_key] += 1
+
+        print(f"Updated counter for {card_key}: {self.card_counters[card_key]}x")
+
+        for label_key, label in self.card_counter_labels.items():
+            display_base = label_key.split()[0]
+            mapped_value = constants.VALUE_MAPPING.get(display_base, None)
+            if mapped_value and str(mapped_value) == card_key:
+                if hasattr(label, 'winfo_toplevel'):
+                    top = label.winfo_toplevel()
+                    top.after(0,
+                              lambda l=label, k=label_key, v=self.card_counters[card_key]: l.config(text=f"{k}: {v}x"))
+                else:
+                    label.config(text=f"{label_key}: {self.card_counters[card_key]}x")
 
     def update_card_counter(self, card_name, increment):
         card_value_name = card_name.split(' ')[0]
+
         if card_value_name in constants.VALUE_MAPPING:
             card_value = constants.VALUE_MAPPING[card_value_name]
         else:
             print(f"Warning: Card value '{card_value_name}' not found in value mapping.")
             return
-        card_value_str = str(card_value)
-        if card_value_str in self.card_counters:
-            print(f"Updating counter for card value {card_value_str} by {increment}")
-            self.card_counters[card_value_str] += increment
-            print(f"Card value {card_value_str} count is now {self.card_counters[card_value_str]}")
-            for label in self.card_counter_labels:
-                if label.cget("text").startswith(card_value_str + ":"):
-                    new_text = f"{card_value_str}: {self.card_counters[card_value_str]}x"
-                    label.config(text=new_text)
-                    break
+
+        if card_value_name == "Ace":
+            card_value_str = "Ace"
+        elif card_value_name in ["Jack", "Queen", "King"]:
+            card_value_str = "10"
         else:
-            print(f"Warning: Card value '{card_value_str}' not found in card counters.")
+            card_value_str = card_value_name
+
+        self.card_counters[card_value_str] += increment
+
+        print(f"Updated counter for {card_value_str}: {self.card_counters[card_value_str]}x")
+
+        for label_key, label in self.card_counter_labels.items():
+            label_base = label_key.split(' ')[0]
+            if (
+                    label_base == card_value_name or
+                    constants.VALUE_MAPPING.get(label_base) == card_value
+            ):
+                try:
+                    root = label.winfo_toplevel()
+                    root.after(0, lambda l=label, k=label_key, v=self.card_counters[card_value_str]: l.config(
+                        text=f"{k}: {v}x"))
+                except Exception as e:
+                    print(f"Failed to update label for {label_key}: {e}")
 
     def calculate_true_count(self):
         decks_remaining = (constants.DECK_COUNT * 52 - len(self.counted_cards_this_round)) / 52
@@ -138,3 +177,22 @@ class CardUtils:
     @staticmethod
     def is_pair_hand(player_cards):
         return len(player_cards) == 2 and player_cards[0].split(' ')[0] == player_cards[1].split(' ')[0]
+
+    def update_label_safe(self, label, text):
+        if self.gui:
+            print(f"[UI Thread] Scheduling label update: {text}")
+            self.gui.after(0, lambda: label.config(text=text))
+        else:
+            print("[Warning] GUI not attached. Label not updated.")
+
+
+_card_utils_instance = None
+
+
+def get_card_utils(gui=None):
+    global _card_utils_instance
+    if _card_utils_instance is None:
+        _card_utils_instance = CardUtils(gui)
+    elif gui:
+        _card_utils_instance.gui = gui
+    return _card_utils_instance

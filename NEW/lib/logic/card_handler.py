@@ -3,14 +3,14 @@ import tempfile
 
 from ..common import constants
 from ..common.card_mappings import dealer_class_mapping
-from .card_utils import CardUtils
+from .card_utils import get_card_utils
 
 
 class CardHandler:
     def __init__(self):
         self.dealer_cards = []
         self.cards_info = []
-        self.card_utils = CardUtils()
+        self.card_utils = get_card_utils()
 
     def handle_card_detection(self, card_name):
         if isinstance(card_name, int):
@@ -18,7 +18,10 @@ class CardHandler:
         else:
             card_value = self.card_utils.get_card_value(card_name)
 
-        self.card_utils.update_count(card_name)
+        if card_name not in self.card_utils.counted_cards_this_round:
+            self.card_utils.update_count(card_name)
+            self.card_utils.counted_cards_this_round.add(card_name)
+
         self.card_utils.print_card_counts()
 
     def convert_int_to_card_name(self, value):
@@ -62,7 +65,7 @@ class CardHandler:
 
         self.card_utils.print_card_counts()
 
-    def add_or_update_player_card(self, detected_card, player_info, card_name):
+    def add_or_update_player_card(self, detected_card, player_info, card_name, player_index, card_index):
         if "-" in player_info['cards']:
             replace_index = player_info['cards'].index("-")
             player_info['cards'][replace_index] = card_name
@@ -72,5 +75,5 @@ class CardHandler:
             player_info['confidences'].append(detected_card['confidence'])
 
         print(f"Player {player_info} card updated: {player_info['cards']}")
-        self.card_utils.update_count(card_name)
+
         self.card_utils.print_card_counts()

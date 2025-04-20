@@ -1,6 +1,6 @@
 VERSION = "1.9"
 TITLE = f"Blackjack AI - v{VERSION}"
-SIZE = "1200x800"
+SIZE = "1200x1000"
 RESOLUTION = "2560x1440"
 
 BASE_RESOLUTION = (2560, 1440)
@@ -54,7 +54,7 @@ VALUE_MAPPING = {
     'Jack': 10,
     'Queen': 10,
     'King': 10,
-    'Ace': 1  # Ace can be 1 or 11, but typically counted as 1 for simplicity
+    'Ace': 11  # Ace can be 1 or 11, but typically counted as 11 for simplicity
 }
 
 ACTION_MAPPING = {

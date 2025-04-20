@@ -56,11 +56,20 @@ class GraphicalUserInterface(tk.Tk):
         self.reset_button = ttk.Button(self, text="Reset Round", command=self.reset_round)
         self.reset_button.pack(pady=10)
 
+        self.refresh_button = ttk.Button(self, text="Refresh Counters", command=self.force_refresh_counters)
+        self.refresh_button.pack(pady=5)
+
         self.round_label = ttk.Label(self, text=f"Round: 0", font=("Helvetica", 14))
         self.round_label.place(x=10, y=5)
 
         self.dealer_value_label = ttk.Label(self, text="Dealer has: ", font=("Helvetica", 14))
         self.dealer_value_label.place(relx=1.0, rely=0.0, x=-50, y=0, anchor='ne')
+
+        self.counter_frame = ttk.LabelFrame(self, text="Card Counters")
+        self.counter_frame.pack(pady=10)
+
+        self.card_counter_widgets = {}
+        self.create_card_counter_widgets()
 
         self.canvas = tk.Canvas(self, bg="#ffffff")
         self.canvas.pack(fill=tk.BOTH, expand=True, padx=30, pady=20)
@@ -115,11 +124,66 @@ class GraphicalUserInterface(tk.Tk):
                                         font=("Helvetica", 10, "bold"))
 
                 x = 50 + (player_num - 1) * (constants.CARD_WIDTH + constants.CARD_SPACING)
+                y = 280
 
                 self.canvas.create_window(x, y, anchor="nw", window=decision_label)
                 self.canvas.create_window(x, y + 25, anchor="nw", window=second_label)
 
                 self.player_decision_labels[player_num] = [decision_label, second_label]
+
+    def create_card_counter_widgets(self):
+        numbers = [str(n) for n in range(2, 11)]
+        faces = ['Jack', 'Queen', 'King', 'Ace']
+
+        self.card_value_map = {
+            'Jack': '10',
+            'Queen': '10',
+            'King': '10',
+            'Ace': 'Ace'
+        }
+
+        full_order = numbers + faces
+
+        for idx, card in enumerate(numbers + faces):
+            if card in numbers:
+                row = numbers.index(card)
+                col = 0
+            else:
+                row = faces.index(card)
+                col = 3
+
+            label_text = f"{card}: 0x"
+
+            minus_btn = tk.Button(self.counter_frame, text="-", fg="white", bg="red", width=3,
+                                  command=lambda c=card: self.adjust_card_count(c, -1))
+            minus_btn.grid(row=row, column=col)
+
+            label = tk.Label(self.counter_frame, text=label_text, width=10, anchor="w")
+            label.grid(row=row, column=col + 1)
+
+            plus_btn = tk.Button(self.counter_frame, text="+", fg="white", bg="green", width=3,
+                                 command=lambda c=card: self.adjust_card_count(c, 1))
+            plus_btn.grid(row=row, column=col + 2)
+
+            self.card_counter_widgets[card] = label
+
+            if self.background_processor and self.background_processor.blackjack_logic:
+                logic = self.background_processor.blackjack_logic
+                logic.card_utils.card_counter_labels[card] = label
+
+    def adjust_card_count(self, card_name, increment):
+        if not self.background_processor or not self.background_processor.blackjack_logic:
+            return
+
+        logic = self.background_processor.blackjack_logic
+        card_utils = logic.card_utils
+
+        mapped = self.card_value_map.get(card_name, card_name)
+        card_utils.update_card_counter(card_name, increment)
+
+        count = card_utils.card_counters.get(mapped, 0)
+        label = self.card_counter_widgets[card_name]
+        label.config(text=f"{card_name}: {count}x")
 
     def on_resize(self, event):
         if hasattr(self.pbox_generator, 'current_image_path') and self.pbox_generator.current_image_path:
@@ -128,6 +192,22 @@ class GraphicalUserInterface(tk.Tk):
     def clear_screen(self):
         self.canvas.delete("all")
         print("Screen cleared.")
+
+    def force_refresh_counters(self):
+        if self.background_processor and self.background_processor.blackjack_logic:
+            card_utils = self.background_processor.blackjack_logic.card_utils
+
+            for card_name, label in self.card_counter_widgets.items():
+                mapped = self.card_value_map.get(card_name, card_name)
+                count = card_utils.card_counters.get(mapped, 0)
+                label.config(text=f"{card_name}: {count}x")
+
+            self.counter_frame.update_idletasks()
+            self.counter_frame.update()
+            self.update_idletasks()
+            self.update()
+
+            print("[REFRESH] Counter labels updated manually.")
 
     def start(self):
         if not self.monitor_utils.monitor:
@@ -140,12 +220,18 @@ class GraphicalUserInterface(tk.Tk):
             self.background_processor.blackjack_logic.set_monitor(self.monitor_utils.monitor)
         self.background_processor.start()
 
+        if not self.background_processor:
+            self.background_processor = BackgroundProcessor(self.update_ui_callback, self)
+            self.background_processor.blackjack_logic.set_monitor(self.monitor_utils.monitor)
+
     def reset_round(self):
         if self.background_processor and self.background_processor.blackjack_logic:
             threading.Thread(target=self.run_reset_process, daemon=True).start()
 
     def run_reset_process(self):
         self.background_processor.blackjack_logic.reset_for_new_round()
+        logic = self.background_processor.blackjack_logic
+        logic.card_utils.counted_cards_this_round.clear()
         self.gui_reset_update()
 
     def gui_reset_update(self):
@@ -157,3 +243,7 @@ class GraphicalUserInterface(tk.Tk):
             logic = self.background_processor.blackjack_logic
             decisions = logic.get_current_player_decisions()
             self.update_player_decision_labels(decisions)
+
+            for label in self.card_counter_widgets.values():
+                label.update_idletasks()
+                label.update()

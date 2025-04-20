@@ -13,7 +13,7 @@ from collections import defaultdict
 from PIL import Image, ImageEnhance, ImageOps, ImageTk, ImageDraw, ImageFont
 
 from .utils import Utils
-from .card_utils import CardUtils
+from .card_utils import get_card_utils
 from .card_handler import CardHandler
 from .monitor_utils import MonitorUtils
 from .decision_making import DecisionMaking
@@ -53,7 +53,7 @@ class BlackjackLogic:
         self.players_received_first_card = set()
         self.utils = Utils()
         self.card_handler = CardHandler()
-        self.card_utils = CardUtils()
+        self.card_utils = get_card_utils()
         self.monitor_utils = MonitorUtils()
         self.decision_making = DecisionMaking()
         self.model_players = self.utils.initialize_player_model()
@@ -234,41 +234,72 @@ class BlackjackLogic:
 
         best_card = None
         best_confidence = 0
+        card_index_to_lock = None
 
         for prediction in predictions:
-            x, y, class_label, confidence = prediction['x'], prediction['y'], prediction['class'], prediction[
-                'confidence']
+            x, y = prediction['x'], prediction['y']
+            class_label = prediction['class']
+            confidence = prediction['confidence']
+
             if region.contains_point([x, y]):
                 card_name = self.card_utils.get_card_name(class_label)
-                if confidence > best_confidence and card_name not in self.player_cards[player_index]['cards']:
-                    best_card = {'x': x, 'y': y, 'confidence': confidence, 'card_name': card_name}
+
+                # Determine which card slot is available
+                if state == BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD:
+                    card_index = 0
+                else:
+                    card_index = 1
+
+                # Check if this slot is not already locked
+                if confidence > best_confidence and card_index not in self.locked_cards[player_index]:
+                    best_card = {
+                        'x': x,
+                        'y': y,
+                        'confidence': confidence,
+                        'card_name': card_name
+                    }
                     best_confidence = confidence
+                    card_index_to_lock = card_index
 
         if best_card:
-            detected_card = best_card
-            self.card_handler.handle_card_detection(detected_card['card_name'])  # Ensure this is called
-            print(f"Detected card for player {player_index} in state {state}: {detected_card}")
+            print(f"Detected card for player {player_index} in state {state}: {best_card}")
+            self.card_handler.handle_card_detection(best_card['card_name'])
 
             if state == BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD:
-                self.lock_and_update_player_card(player_index, detected_card, card_index=0)
+                self.lock_and_update_player_card(player_index, best_card, card_index=0)
                 self.detection_states[player_index] = BlackjackLogic.DetectionState.FIRST_CARD_DETECTED
                 print(f"Transitioned to FIRST_CARD_DETECTED for player {player_index}")
 
             elif state == BlackjackLogic.DetectionState.FIRST_CARD_DETECTED:
-                self.lock_and_update_player_card(player_index, detected_card, card_index=1)
+                self.lock_and_update_player_card(player_index, best_card, card_index=1)
                 self.detection_states[player_index] = BlackjackLogic.DetectionState.SECOND_CARD_DETECTED
                 print(f"Transitioned to SECOND_CARD_DETECTED for player {player_index}")
 
     def lock_and_update_player_card(self, player_index, detected_card, card_index):
+        # Prevent duplicate card entries for same player and position
+        existing_card = self.player_cards[player_index]['cards'][card_index]
+        if existing_card == detected_card['card_name']:
+            print(f"[SKIP] Card {card_index} for player {player_index} already holds {existing_card}")
+            return
+
         self.locked_cards[player_index].add(card_index)
         self.detection_timers[player_index][f"card_{card_index}"] = time.time()
         print(f"Card {card_index} locked for player {player_index}")
 
-        if not self.card_utils.is_duplicate_or_nearby_card(detected_card, self.player_cards[player_index]['cards']):
-            self.card_handler.add_or_update_player_card(detected_card, self.player_cards[player_index],
-                                                        detected_card['card_name'])
-            self.card_handler.print_all_cards(self.player_cards)
-            self.update_gui()
+        identity_key = (player_index, card_index)
+
+        if identity_key not in self.card_utils.counted_cards_this_round:
+            self.card_handler.add_or_update_player_card(
+                detected_card, self.player_cards[player_index],
+                detected_card['card_name'], player_index, card_index
+            )
+            self.card_utils.counted_cards_this_round.add(identity_key)
+            print(f"[COUNTED] {identity_key}")
+        else:
+            print(f"[SKIP] Already counted for {identity_key}")
+
+        self.card_handler.print_all_cards(self.player_cards)
+        self.update_gui()
 
     def update_if_higher_confidence(self, player_index, detected_card):
         if detected_card['confidence'] > max(self.player_cards[player_index]['confidences']):

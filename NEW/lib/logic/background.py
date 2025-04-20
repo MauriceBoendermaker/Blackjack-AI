@@ -3,7 +3,7 @@ import queue
 import threading
 
 from ..common import constants
-from .card_utils import CardUtils
+from .card_utils import get_card_utils
 from .blackjack import BlackjackLogic
 
 
@@ -13,7 +13,7 @@ class BackgroundProcessor:
         self.update_ui_callback = update_ui_callback
         self.update_queue = queue.Queue()
         self.blackjack_logic = BlackjackLogic(gui)
-        self.card_utils = CardUtils()
+        self.card_utils = get_card_utils(gui)
 
     def start(self):
         threading.Thread(target=self.background_processing, daemon=True).start()
