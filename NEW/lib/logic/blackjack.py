@@ -1,22 +1,23 @@
+import os
+import cv2
 import csv
 import time
-from collections import defaultdict
-import os
 import tempfile
-from tkinter import font
-import tkinter as tk
 import threading
 import requests
+import tkinter as tk
 
-import cv2
+from tkinter import font
+from collections import defaultdict
+
 from PIL import Image, ImageEnhance, ImageOps, ImageTk, ImageDraw, ImageFont
 
-from ..common import constants, card_mappings
 from .utils import Utils
-from .card_handler import CardHandler
 from .card_utils import CardUtils
+from .card_handler import CardHandler
 from .monitor_utils import MonitorUtils
 from .decision_making import DecisionMaking
+from ..common import constants, card_mappings
 
 
 class BlackjackLogic:
@@ -52,14 +53,6 @@ class BlackjackLogic:
         self.players_received_first_card = set()
         self.utils = Utils()
         self.card_handler = CardHandler()
-
-        # Test various card inputs
-        # test_cards = ["Ace of Clubs", "3 of Diamonds", "Jack of Hearts", "9 of Spades", "King of Diamonds"]
-        # for card in test_cards:
-        #     self.card_handler.handle_card_detection(card)
-        #
-        # self.card_handler.card_utils.print_card_counts()
-
         self.card_utils = CardUtils()
         self.monitor_utils = MonitorUtils()
         self.decision_making = DecisionMaking()
@@ -70,14 +63,14 @@ class BlackjackLogic:
         self.player_cards = defaultdict(lambda: {"cards": ["-", "-"], "confidences": [0.0, 0.0]})
         self.detection_timers = defaultdict(lambda: {"first_card": None, "second_card": None})
         self.detection_start_time = time.time()
-        self.locked_cards = defaultdict(set)  # Track locked card indices separately
-        self.manually_replaced_cards = defaultdict(set)  # Track manually replaced card indices separately
+        self.locked_cards = defaultdict(set)
+        self.manually_replaced_cards = defaultdict(set)
         self.player_regions = []
         self.detection_states = defaultdict(
-            lambda: BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD)  # Track detection states for each player
+            lambda: BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD)
+        self.player_decisions = {}
 
     def fetch_second_recommendation(self, player_cards, dealer_card):
-        # Map cards to URL parameters
         card_count = {'2': 0, '3': 0, '4': 0, '5': 0, '6': 0, '7': 0, '8': 0, '9': 0, '10': 0, 'J': 0, 'Q': 0, 'K': 0,
                       'A': 0}
         for card in player_cards:
@@ -127,7 +120,6 @@ class BlackjackLogic:
             "Split": data.get("Split", 0)
         }
 
-        # Find the best recommendation
         best_recommendation = max(recommendations, key=recommendations.get)
         return best_recommendation, recommendations[best_recommendation]
 
@@ -149,15 +141,18 @@ class BlackjackLogic:
     def initialize_screenshot(self):
         self.captured_screenshot = self.monitor_utils.capture_screen()
 
+    def get_current_player_decisions(self):
+        return self.player_decisions
+
     def load_strategy(self):
         strategy = {}
         with open(constants.CSV_FILE_PATH, newline='') as csvfile:
             reader = csv.reader(csvfile, delimiter=';')
             for row in reader:
                 dealer_card, player_hand, action = row
-                dealer_card = dealer_card.strip().upper()  # Normalize dealer card value
-                player_hand = player_hand.strip().upper()  # Normalize player hand representation
-                action = action.strip().upper()  # Normalize action
+                dealer_card = dealer_card.strip().upper()
+                player_hand = player_hand.strip().upper()
+                action = action.strip().upper()
                 strategy[(dealer_card, player_hand)] = action
         self.blackjack_strategy = strategy
         print("Loaded strategy:", self.blackjack_strategy)
@@ -174,13 +169,11 @@ class BlackjackLogic:
         while True:
             self.initialize_screenshot()
 
-            # Crop to dealer's area
             dealer_area = self.captured_screenshot.crop((constants.DEALER_AREA_LEFT,
                                                          constants.DEALER_AREA_UPPER,
                                                          constants.DEALER_AREA_RIGHT,
                                                          constants.DEALER_AREA_LOWER))
 
-            # Save the cropped dealer area image for debugging
             debug_image_path = "dealer_area_current_view.jpg"
             dealer_area.save(debug_image_path)
 
@@ -193,7 +186,6 @@ class BlackjackLogic:
                                                            overlap=constants.PREDICTION_OVERLAP_DEALER).json()[
                 'predictions']
 
-            # Draw predictions on the dealer area image
             self.draw_predictions(dealer_area, predictions_dealer, "dealer_area_with_predictions.jpg")
 
             # Debug: Print the raw predictions
@@ -205,16 +197,9 @@ class BlackjackLogic:
                 card_name = card_mappings.dealer_class_mapping.get(class_label, "Unknown")
                 dealer_card.append(card_name)
 
-            # Debug: Print the identified dealer cards
             print(f"Dealer card: {dealer_card}")
-
-            # Update the dealer's card information
             self.dealer_up_card = dealer_card[0] if dealer_card else "Unknown"
-
-            # Use the updated dealer card in your game logic
             print(f"Updated dealer's card: {self.dealer_up_card}")
-
-            # Update the dealer card display
             self.update_dealer_card_display(dealer_card)
 
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
@@ -226,7 +211,6 @@ class BlackjackLogic:
                                                              overlap=constants.PREDICTION_OVERLAP_PLAYERS).json()[
                 'predictions']
 
-            # Draw predictions on the full screenshot
             full_screenshot_with_predictions_path = "full_screenshot_with_predictions.jpg"
             self.draw_predictions(self.captured_screenshot, predictions_players, full_screenshot_with_predictions_path)
 
@@ -283,8 +267,8 @@ class BlackjackLogic:
         if not self.card_utils.is_duplicate_or_nearby_card(detected_card, self.player_cards[player_index]['cards']):
             self.card_handler.add_or_update_player_card(detected_card, self.player_cards[player_index],
                                                         detected_card['card_name'])
-            self.card_handler.print_all_cards(self.player_cards)  # Update and print cards info
-            self.update_gui()  # Ensure the GUI is updated
+            self.card_handler.print_all_cards(self.player_cards)
+            self.update_gui()
 
     def update_if_higher_confidence(self, player_index, detected_card):
         if detected_card['confidence'] > max(self.player_cards[player_index]['confidences']):
@@ -295,14 +279,14 @@ class BlackjackLogic:
             self.card_handler.print_all_cards(self.player_cards)
 
     def blackjack_decision(self, player_cards, dealer_up_card, true_count, base_bet):
-        self.recommendations.clear()  # Clear previous recommendations
+        self.recommendations.clear()
         if dealer_up_card is None or dealer_up_card == "Unknown":
-            dealer_value = "A"  # Default to Ace if unknown
+            dealer_value = "A"
         else:
             dealer_value = self.card_utils.get_dealer_card_value(dealer_up_card)
-            if dealer_value in ["10", "Jack", "Queen", "King"]:  # Normalize face cards to 10
+            if dealer_value in ["10", "Jack", "Queen", "King"]:
                 dealer_value = "10"
-            elif dealer_value == "1":  # Ensure "1" is converted to "A"
+            elif dealer_value == "1":
                 dealer_value = "A"
 
         hand_representation = self.card_utils.get_hand_representation(player_cards)
@@ -317,7 +301,7 @@ class BlackjackLogic:
         # Normalize keys
         action_key = (str(action_key[0]).strip().upper(), str(action_key[1]).strip().upper())
 
-        print(f"Looking up action for key: {action_key}")  # Debug print
+        print(f"Looking up action for key: {action_key}")
         action = self.blackjack_strategy.get(action_key, "?")
 
         if action == "?":
@@ -364,6 +348,14 @@ class BlackjackLogic:
 
                 previous_recommendation = player_data.get('recommendation')
 
+                mapped_decision = decision_recommendations[0][0] if decision_recommendations else "-"
+                second_recommendation, _ = self.fetch_second_recommendation(cards, dealer_up_card)
+
+                self.player_decisions[player_index + 1] = {
+                    "decision": mapped_decision,
+                    "second": second_recommendation
+                }
+
                 if previous_recommendation != decision_recommendations:
                     player_data['recommendation'] = decision_recommendations
                     self.card_utils.print_player_cards(player_index, cards, decision_recommendations)
@@ -396,13 +388,12 @@ class BlackjackLogic:
             self.cards_info.append(f"P{player_index + 1}: {' // '.join(card_info)}")
             print(f"P{player_index + 1}: {' ///// '.join(card_info)}")
 
-        # Use the card_utils method to print card counts
         self.card_utils.print_card_counts()
 
     def update_player_cards_display(self, player_data_list, dealer_up_card, true_count, base_bet):
         self.clear_player_cards()
 
-        start_y = 50  # Increase the starting y position for more padding
+        start_y = 50
         total_width = 7 * (constants.CARD_WIDTH + constants.CARD_SPACING) + 8
         column_width = (total_width - 8) // 7
 
@@ -422,43 +413,52 @@ class BlackjackLogic:
                 photo_img = self.get_card_image(card)
                 card_label = tk.Label(self.gui.canvas, image=photo_img, bg="white")
                 card_label.image = photo_img
-                card_label.place(x=start_x, y=card_display_y)  # Remove padx and pady
+                card_label.place(x=start_x, y=card_display_y)
                 card_label.bind("<Button-1>", lambda e, pi=i, ci=j: self.on_card_click(pi, ci))
                 self.player_cards_labels.append(card_label)
-                card_display_y += constants.CARD_HEIGHT + 20  # Increase spacing between cards
+                card_display_y += constants.CARD_HEIGHT + 20
 
-            start_y = 50  # Reset the starting y position for the next player
+            start_y = 50
             self.create_label(f"Player {player_number}", start_x + column_width // 2, self.gui.winfo_height() - 20,
                               anchor="s")
 
             decision = self.blackjack_decision(cards, dealer_up_card, true_count, base_bet)[0] if player_data else (
                 "-", "black")
-            self.create_colored_labels(f"Decision: ", decision[0], decision[1], start_x + column_width // 2,
+            self.create_colored_labels("", decision[0], decision[1], start_x + column_width // 2,
                                        card_display_y + 5, "n")
 
-            # Fetch and display the second recommendation
-            second_recommendation, second_value = self.fetch_second_recommendation(cards, dealer_up_card)
-            self.create_colored_labels(f"Second Decision: ", second_recommendation, "blue", start_x + column_width // 2,
-                                       card_display_y + 35, "n")
+            second_recommendation, _ = self.fetch_second_recommendation(cards, dealer_up_card)
+            self.create_second_decision_label(second_recommendation, start_x + column_width // 2, card_display_y + 35,
+                                              player_number)
 
     def create_colored_labels(self, prefix, text, color, x, y, anchor="n"):
-        player_number = int(
-            x // (constants.CARD_WIDTH + constants.CARD_SPACING))  # Determine player number based on x position
-
-        # Clear previous labels for the specific player
-        if player_number in self.players_decision_labels:
-            for label in self.players_decision_labels[player_number]:
-                label.destroy()
-        self.players_decision_labels[player_number] = []
-
-        # Define a larger font
-        large_font = font.Font(family="Helvetica", size=14, weight="bold")  # Increase font size
-
-        # Create a single label to hold both the prefix and the decision text
+        player_number = int(x // (constants.CARD_WIDTH + constants.CARD_SPACING))
         combined_text = f"{prefix} {text}"
-        label_combined = tk.Label(self.gui.canvas, text=combined_text, fg=color, bg="white", font=large_font)
-        label_combined.place(x=x, y=y, anchor=anchor)  # Remove padx and pady
-        self.players_decision_labels[player_number].append(label_combined)
+        large_font = font.Font(family="Helvetica", size=14, weight="bold")
+
+        if player_number in self.players_decision_labels and self.players_decision_labels[player_number]:
+            label = self.players_decision_labels[player_number][0]
+            if label.cget("text") != combined_text or label.cget("fg") != color:
+                label.config(text=combined_text, fg=color)
+        else:
+            label = tk.Label(self.gui.canvas, text=combined_text, fg=color, bg="white", font=large_font)
+            label.place(x=x, y=y, anchor=anchor)
+            self.players_decision_labels[player_number] = [label]
+
+    def create_second_decision_label(self, text, x, y, player_number):
+        combined_text = f"Optimal: {text}"
+        large_font = font.Font(family="Helvetica", size=14, weight="bold")
+
+        if len(self.players_decision_labels.get(player_number, [])) > 1:
+            label = self.players_decision_labels[player_number][1]
+            if label.cget("text") != combined_text:
+                label.config(text=combined_text)
+        else:
+            label = tk.Label(self.gui.canvas, text=combined_text, fg="blue", bg="white", font=large_font)
+            label.place(x=x, y=y, anchor="n")
+            if player_number not in self.players_decision_labels:
+                self.players_decision_labels[player_number] = []
+            self.players_decision_labels[player_number].append(label)
 
     def on_card_click(self, player_index, card_index):
         self.open_card_selection_window(player_index, card_index)
@@ -476,21 +476,20 @@ class BlackjackLogic:
             card_image_path = self.utils.generate_card_image_path(card)
             try:
                 img = Image.open(card_image_path)
-                img = img.resize((60, 90))  # Resize the image to fit the button
+                img = img.resize((60, 90))
                 imgtk = ImageTk.PhotoImage(image=img)
                 card_button = tk.Button(selection_window, image=imgtk,
                                         command=lambda c=card: self.replace_card(player_index, card_index, c))
-                card_button.image = imgtk  # Keep a reference to avoid garbage collection
-                card_button.grid(row=i // 10, column=i % 10)  # Arrange buttons in a grid
+                card_button.image = imgtk
+                card_button.grid(row=i // 10, column=i % 10)
             except FileNotFoundError:
                 print(f"Image file not found: {card_image_path}")
 
-        # Add the default card image as an option
         default_img = Image.open(constants.DEFAULT_CARD_IMAGE_PATH).resize((60, 90))
         default_imgtk = ImageTk.PhotoImage(image=default_img)
         default_button = tk.Button(selection_window, image=default_imgtk,
                                    command=lambda: self.replace_card(player_index, card_index, "-"))
-        default_button.image = default_imgtk  # Keep a reference to avoid garbage collection
+        default_button.image = default_imgtk
         default_button.grid(row=len(available_cards) // 10, column=0)
 
     def replace_card(self, player_index, card_index, card_name):
@@ -513,27 +512,24 @@ class BlackjackLogic:
             else:
                 self.player_cards[player_index]['cards'][card_index] = card_name
                 self.player_cards[player_index]['confidences'][
-                    card_index] = 1.0  # Assuming full confidence for manual replacement
-                self.manually_replaced_cards[player_index].add(card_index)  # Mark card index as manually replaced
-                self.locked_cards[player_index].add(card_index)  # Also lock the card index
+                    card_index] = 1.0
+                self.manually_replaced_cards[player_index].add(card_index)
+                self.locked_cards[player_index].add(card_index)
 
             print(f"Manually replaced card {card_index} for player {player_index} with {card_name}")
 
-        # Update GUI
         self.update_gui()
 
-        # Close all Toplevel windows (the card selection window)
         for widget in self.gui.winfo_children():
             if isinstance(widget, tk.Toplevel):
                 widget.destroy()
 
     def update_dealer_card_display(self, dealer_cards):
         if dealer_cards:
-            card_face = dealer_cards[0]  # Get the face value (e.g., '2', 'Q')
+            card_face = dealer_cards[0]
             card_image_path = None
 
-            # Check for the existence of any card with the given face value
-            for suit in ['hearts', 'diamonds', 'spades', 'clubs']:  # Assuming suits are named like this
+            for suit in ['hearts', 'diamonds', 'spades', 'clubs']:
                 potential_path = f"{constants.CARD_FOLDER_PATH}/{card_face.lower()}_of_{suit}.png"
                 if os.path.exists(potential_path):
                     card_image_path = potential_path
@@ -548,21 +544,18 @@ class BlackjackLogic:
             card_value = "No card detected"
             card_image_path = constants.DEFAULT_CARD_IMAGE_PATH
 
-        # Debug: Print the image path being used
         print(f"Card image path: {card_image_path}")
 
         try:
             img = Image.open(card_image_path)
             img = img.resize((100, 150))
-
-            # Apply green color filter
-            img = img.convert("L")  # Convert to grayscale
+            img = img.convert("L")
             img = ImageOps.colorize(img, black="grey", white="white")
-
             imgtk = ImageTk.PhotoImage(image=img)
+
             self.dealer_card_label.config(image=imgtk)
             self.dealer_card_label.image = imgtk
-            print(f"Dealer card display updated with: {card_value}")  # Debug print
+            print(f"Dealer card display updated with: {card_value}")
         except FileNotFoundError:
             print(f"Image file not found: {card_image_path}")
         except Exception as e:
@@ -603,13 +596,11 @@ class BlackjackLogic:
     def reset_for_new_round(self):
         self.player_cards.clear()
         self.players_cards_data.clear()
-
         self.first_card_detected.clear()
         self.second_card_detected.clear()
         self.card_value_counts.clear()
         self.players_received_first_card.clear()
         self.card_utils.counted_cards_this_round.clear()
-
         self.round_count += 1
         print("Reset for new round.")
 
@@ -631,16 +622,13 @@ class BlackjackLogic:
 
     def clear_player_cards(self):
         with self.lock:
-            # Collect all changes in a temporary list
             changes = []
             for player_number, label_list in self.players_decision_labels.items():
                 for label in label_list:
                     changes.append((player_number, label))
 
-            # Apply changes after iteration
             for player_number, label in changes:
                 self.players_decision_labels[player_number].remove(label)
                 label.destroy()
 
-            # Clear the recommendations
             self.recommendations.clear()
