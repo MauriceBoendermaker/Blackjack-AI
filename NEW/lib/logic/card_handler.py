@@ -22,7 +22,6 @@ class CardHandler:
         self.card_utils.print_card_counts()
 
     def convert_int_to_card_name(self, value):
-        # Example conversion logic; customize as needed
         if value == 11:
             return "Ace"
         elif value <= 10:
@@ -31,17 +30,15 @@ class CardHandler:
             return "Unknown"
 
     def capture_dealer_cards(self, image, model):
-        # Save the cropped image for debugging
         image.save(constants.OUTPUT_DEBUG_IMAGE_PATH)
 
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
             temp_file_path = temp_file.name
             image.save(temp_file_path)
 
-        # Proceed with the prediction
         predictions = model.predict(temp_file_path, confidence=constants.PREDICTION_CONFIDENCE_DEALER,
                                     overlap=constants.PREDICTION_OVERLAP_DEALER).json()['predictions']
-        os.unlink(temp_file_path)  # Delete the temp file after prediction
+        os.unlink(temp_file_path)
 
         for prediction in predictions:
             class_label = prediction['class']
@@ -51,7 +48,7 @@ class CardHandler:
         return self.dealer_cards
 
     def print_all_cards(self, player_cards):
-        self.cards_info.clear()  # Clear previous card info
+        self.cards_info.clear()
         for player_index in sorted(player_cards):
             cards = player_cards[player_index]['cards']
             confidences = player_cards[player_index]['confidences']
@@ -63,7 +60,6 @@ class CardHandler:
             self.cards_info.append(f"P{player_index + 1}: {' // '.join(card_info)}")
             print(f"P{player_index + 1}: {' // '.join(card_info)}")
 
-        # Print card counts using the method from CardUtils
         self.card_utils.print_card_counts()
 
     def add_or_update_player_card(self, detected_card, player_info, card_name):
@@ -76,5 +72,5 @@ class CardHandler:
             player_info['confidences'].append(detected_card['confidence'])
 
         print(f"Player {player_info} card updated: {player_info['cards']}")
-        self.card_utils.update_count(card_name)  # Ensure card count is updated for each detected card
-        self.card_utils.print_card_counts()  # Print updated card counts
+        self.card_utils.update_count(card_name)
+        self.card_utils.print_card_counts()

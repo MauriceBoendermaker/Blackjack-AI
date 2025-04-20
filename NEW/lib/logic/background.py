@@ -17,13 +17,13 @@ class BackgroundProcessor:
 
     def start(self):
         threading.Thread(target=self.background_processing, daemon=True).start()
-        self.gui.after(100, self.check_for_updates)  # Start checking for updates in the GUI thread
+        self.gui.after(100, self.check_for_updates)
 
     def background_processing(self):
         while True:
             self.blackjack_logic.capture_screen_and_track_cards()
             self.update_ui_callback()
-            time.sleep(0.5)  # Add a short delay to avoid rapid flickering
+            time.sleep(0.5)
             self.blackjack_logic.capture_screen_and_track_cards()
             self.update_queue.put("update")
 
@@ -41,4 +41,4 @@ class BackgroundProcessor:
                 if data == "update":
                     self.update_ui_callback()
         finally:
-            self.gui.after(100, self.update_gui_from_queue)  # Keep the interval reasonable
+            self.gui.after(100, self.update_gui_from_queue)

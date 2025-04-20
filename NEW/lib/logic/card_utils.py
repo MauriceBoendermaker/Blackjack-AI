@@ -9,8 +9,8 @@ class CardUtils:
         self.card_counter_labels = {}
         self.counted_cards_this_round = set()
         self.running_count = 0
-        self.card_counters = {str(k): 0 for k in range(1, 11)}  # Initialize counts for 1-10; '10' includes face cards
-        self.card_counters.update({'Ace': 0})  # Specifically tracking Aces, if necessary
+        self.card_counters = {str(k): 0 for k in range(1, 11)}
+        self.card_counters.update({'Ace': 0})
 
     def get_card_name(self, class_label):
         return class_mapping.get(class_label, "Unknown")
@@ -22,15 +22,13 @@ class CardUtils:
 
     def update_count(self, card_name):
         card_value = self.get_card_value(card_name)
-        if card_value == 0:  # Skip placeholder values
+        if card_value == 0:
             return
-        # Update running count based on card value
         if 2 <= card_value <= 6:
             self.running_count += 1
-        elif card_value in [10, 11]:  # 10 for face cards, 11 for Aces
+        elif card_value in [10, 11]:
             self.running_count -= 1
-        # Update card counters
-        card_key = '10' if card_value >= 10 else str(card_value)  # Group face cards and 10s
+        card_key = '10' if card_value >= 10 else str(card_value)
         self.card_counters[card_key] += 1
 
     def update_card_counter(self, card_name, increment):
@@ -59,21 +57,18 @@ class CardUtils:
         return true_count
 
     def get_card_value(self, card_name):
-        if card_name == '-':  # Handle placeholder value
+        if card_name == '-':
             return 0
 
-        # Handle case where card_name is already an integer
         if isinstance(card_name, int):
             return card_name
 
-        # Map face values and Ace to their corresponding values
         face_values = {
             'Jack': 10,
             'Queen': 10,
             'King': 10,
-            'Ace': 11  # Use 11 or 1 depending on the specific blackjack rules
+            'Ace': 11
         }
-        # Extract the card type from the string (assuming the input is a card name like "Ace of Clubs")
         card_value_name = card_name.split()[0]
         if card_value_name in face_values:
             return face_values[card_value_name]
@@ -90,7 +85,7 @@ class CardUtils:
             print(f" {value} => {count}x")
 
     def get_dealer_card_value(self, card):
-        card_value = card.split(' ')[0].capitalize()  # Capitalize the first letter
+        card_value = card.split(' ')[0].capitalize()
         if card_value in ["Jack", "Queen", "King"]:
             return "10"
         elif card_value == "Ace":
@@ -126,11 +121,10 @@ class CardUtils:
         ace_count = 0
         for card in cards:
             card_value = self.get_card_value(card)
-            if card_value == 11:  # Ace handling
+            if card_value == 11:
                 ace_count += 1
             total += card_value
 
-        # Adjust for Aces if total is above 21
         while total > 21 and ace_count:
             total -= 10
             ace_count -= 1

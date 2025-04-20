@@ -34,10 +34,8 @@ class PlayerBoxGenerator:
 
     def _capture_screen_and_predict(self):
         img = self.monitor_utils.capture_screen()
+        img.save(constants.INPUT_SCREENSHOT_PATH)
 
-        img.save(constants.INPUT_SCREENSHOT_PATH)  # Save screenshot for prediction
-
-        # Use model to predict on the saved screenshot and save the prediction result
         self.model_players.predict(
             constants.INPUT_SCREENSHOT_PATH, confidence=constants.PREDICTION_CONFIDENCE_PLAYERS,
             overlap=constants.PREDICTION_OVERLAP_PLAYERS
@@ -60,15 +58,12 @@ class PlayerBoxGenerator:
             return
 
         img = Image.open(image_path)
-
-        # Resize the image to fit 60% of the window dimensions while maintaining the aspect ratio
         window_width = self.gui.winfo_width()
         window_height = self.gui.winfo_height()
         target_width = int(window_width * 0.6)
         target_height = int(window_height * 0.6)
         img.thumbnail((target_width, target_height))
-
         img_tk = ImageTk.PhotoImage(img)
         self.gui.canvas.delete("all")
         self.gui.canvas.create_image(0, 0, anchor=tk.NW, image=img_tk)
-        self.gui.img_tk = img_tk  # Keep a reference to avoid garbage collection
+        self.gui.img_tk = img_tk

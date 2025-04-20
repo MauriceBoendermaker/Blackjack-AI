@@ -1,4 +1,4 @@
-VERSION = "1.8"
+VERSION = "1.9"
 TITLE = f"Blackjack AI - v{VERSION}"
 SIZE = "1200x800"
 RESOLUTION = "2560x1440"
@@ -18,13 +18,13 @@ BASE_PLAYER_REGIONS = [
 ROBOFLOW_API_KEY = "WBy7jG6AiiqjzifOfiNH"
 
 # Initializes Roboflow API for Player Card detection
-PROJECT_ID_PLAYERS = "dey022"  # API Project ID for player cards
+PROJECT_ID_PLAYERS = "dey022"
 MODEL_VERSION_PLAYERS = 1
 PREDICTION_CONFIDENCE_PLAYERS = 70
 PREDICTION_OVERLAP_PLAYERS = 100
 
 # Initializes Roboflow API for Dealer Card detection
-PROJECT_ID_DEALER = "carddetection-v1hqz"  # API Project ID for player cards
+PROJECT_ID_DEALER = "carddetection-v1hqz"
 MODEL_VERSION_DEALER = 17
 PREDICTION_CONFIDENCE_DEALER = 55
 PREDICTION_OVERLAP_DEALER = 45
