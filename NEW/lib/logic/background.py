@@ -22,10 +22,8 @@ class BackgroundProcessor:
     def background_processing(self):
         while True:
             self.blackjack_logic.capture_screen_and_track_cards()
-            self.update_ui_callback()
-            time.sleep(0.5)
-            self.blackjack_logic.capture_screen_and_track_cards()
             self.update_queue.put("update")
+            time.sleep(0.5)
 
     def check_for_updates(self):
         while not self.update_queue.empty():
