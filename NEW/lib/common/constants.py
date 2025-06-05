@@ -1,6 +1,7 @@
 VERSION = "1.9"
 TITLE = f"Blackjack AI - v{VERSION}"
-SIZE = "1200x1000"
+# Increased width to allow all player boxes to fit on screen comfortably
+SIZE = "1600x1000"
 RESOLUTION = "2560x1440"
 
 # Font configuration
