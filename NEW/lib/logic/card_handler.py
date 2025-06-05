@@ -33,6 +33,9 @@ class CardHandler:
             return "Unknown"
 
     def capture_dealer_cards(self, image, model):
+        # Clear previously detected dealer cards to avoid accumulating cards
+        # from earlier predictions.
+        self.dealer_cards.clear()
         image.save(constants.OUTPUT_DEBUG_IMAGE_PATH)
 
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
