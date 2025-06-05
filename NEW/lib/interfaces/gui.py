@@ -75,23 +75,24 @@ class GraphicalUserInterface(tk.Tk):
         self.action_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
 
         self.pbox_gen_button = ttk.Button(
-            self.action_frame,
+            self,
             text="Generate Player Boxes",
-            command=self.pbox_generator.generate,
+            command=self.pbox_generator.generate_async,
             state=tk.DISABLED,
         )
-        self.pbox_gen_button.grid(row=0, column=0, pady=5, sticky="ew")
+        # Position screenshot button at the bottom-right corner of the window
+        self.pbox_gen_button.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
 
         self.start_button = ttk.Button(self.action_frame, text="Start", command=self.start)
-        self.start_button.grid(row=1, column=0, pady=5, sticky="ew")
+        self.start_button.grid(row=0, column=0, pady=5, sticky="ew")
 
         self.reset_button = ttk.Button(self.action_frame, text="Reset Round", command=self.reset_round)
-        self.reset_button.grid(row=2, column=0, pady=5, sticky="ew")
+        self.reset_button.grid(row=1, column=0, pady=5, sticky="ew")
 
         self.refresh_button = ttk.Button(
             self.action_frame, text="Refresh Counters", command=self.force_refresh_counters
         )
-        self.refresh_button.grid(row=3, column=0, pady=5, sticky="ew")
+        self.refresh_button.grid(row=2, column=0, pady=5, sticky="ew")
 
         self.counter_container = ttk.LabelFrame(self.left_frame, text="Card Counters")
         self.counter_container.grid(row=2, column=0, sticky="nsew")
@@ -148,15 +149,32 @@ class GraphicalUserInterface(tk.Tk):
         self.status_var.set(message)
 
     def draw_canvas(self):
-        self.canvas.create_rectangle(50, 50, 200, 100, fill="black", outline="white")
-        self.canvas.create_text(125, 75, text="Dealer", fill="white")
+        import math
+
+        self.canvas.delete("all")
+        self.update_idletasks()
+        width = self.canvas.winfo_width()
+        height = self.canvas.winfo_height()
+
+        dealer_x = width / 2
+        dealer_y = 80
+        self.canvas.create_rectangle(dealer_x - 75, dealer_y - 40, dealer_x + 75, dealer_y, fill="black", outline="white")
+        self.canvas.create_text(dealer_x, dealer_y - 20, text="Dealer", fill="white")
+
+        radius = 300
+        start_angle = -60
+        angle_step = 120 / 6
+
         for i in range(7):
-            x1 = 50 + i * (constants.CARD_WIDTH + constants.CARD_SPACING)
-            y1 = 150
+            angle = math.radians(start_angle + angle_step * i)
+            x_center = dealer_x + radius * math.cos(angle)
+            y_center = dealer_y + 150 + radius * math.sin(angle)
+            x1 = x_center - constants.CARD_WIDTH / 2
+            y1 = y_center - constants.CARD_HEIGHT / 2
             x2 = x1 + constants.CARD_WIDTH
             y2 = y1 + constants.CARD_HEIGHT
             self.canvas.create_rectangle(x1, y1, x2, y2, outline="black")
-            self.canvas.create_text((x1 + x2) // 2, y2 + 30, text=f"Player {i + 1}", fill="black")
+            self.canvas.create_text((x1 + x2) / 2, y2 + 20, text=f"Player {i + 1}", fill="black")
 
     def populate_monitors(self):
         monitors = screeninfo.get_monitors()

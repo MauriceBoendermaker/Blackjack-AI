@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import tkinter as tk
+import threading
 
 from PIL import Image, ImageTk
 from tkinter import messagebox
@@ -16,21 +17,31 @@ class PlayerBoxGenerator:
         self.model_players = Utils.initialize_player_model(self)
         self.current_image_path = None
         self.monitor_utils = MonitorUtils()
+        self._thread_lock = threading.Lock()
 
     def set_monitor(self, monitor):
         self.monitor_utils.set_monitor(monitor)
 
-    def generate(self):
-        if not self.monitor_utils.monitor:
-            messagebox.showerror("Error", "Monitor not selected.")
+    def generate_async(self):
+        # Run generation in a background thread to keep the UI responsive
+        if self._thread_lock.locked():
             return
+        threading.Thread(target=self._generate, daemon=True).start()
 
-        current_resolution = self._capture_screen_and_predict()
-        scale_x, scale_y = self.monitor_utils.get_scaling_factors(constants.BASE_RESOLUTION, current_resolution)
-        player_regions = self.monitor_utils.scale_player_regions(constants.BASE_PLAYER_REGIONS, scale_x, scale_y)
-        self._draw_player_regions_on_image(constants.OUTPUT_PREDICTION_PATH, player_regions)
-        self.current_image_path = constants.OUTPUT_FINAL_PREDICTION_PATH
-        self._display_image(self.current_image_path)
+    def _generate(self):
+        with self._thread_lock:
+            if not self.monitor_utils.monitor:
+                messagebox.showerror("Error", "Monitor not selected.")
+                return
+
+            self.gui.set_status("Capturing screenshot...")
+            current_resolution = self._capture_screen_and_predict()
+            scale_x, scale_y = self.monitor_utils.get_scaling_factors(constants.BASE_RESOLUTION, current_resolution)
+            player_regions = self.monitor_utils.scale_player_regions(constants.BASE_PLAYER_REGIONS, scale_x, scale_y)
+            self._draw_player_regions_on_image(constants.OUTPUT_PREDICTION_PATH, player_regions)
+            self.current_image_path = constants.OUTPUT_FINAL_PREDICTION_PATH
+            self.gui.after(0, lambda: self._display_image(self.current_image_path))
+            self.gui.set_status("Player boxes generated")
 
     def _capture_screen_and_predict(self):
         img = self.monitor_utils.capture_screen()

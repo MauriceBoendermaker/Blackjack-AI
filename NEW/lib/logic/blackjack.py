@@ -472,7 +472,8 @@ class BlackjackLogic:
                 if card == '-':
                     card = "default"
 
-                photo_img = self.get_card_image(card)
+                # Use cached images to avoid disk overhead
+                photo_img = self.get_cached_card_image(card)
                 card_label = tk.Label(self.gui.canvas, image=photo_img, bg="white")
                 card_label.image = photo_img
                 card_label.place(x=start_x, y=card_display_y)
@@ -605,16 +606,14 @@ class BlackjackLogic:
             def finish_update():
                 self.update_gui()
 
-            # Optional: sleep to smooth things out (remove if not needed)
-            time.sleep(0.05)
-
+            # Immediately schedule UI update for snappier feedback
             self.gui.after(0, finish_update)
 
         threading.Thread(target=do_replacement, daemon=True).start()
 
     def refresh_player_card_image(self, player_index, card_index, card_name):
         try:
-            photo_img = self.get_card_image(card_name)
+            photo_img = self.get_cached_card_image(card_name)
             label_index = player_index * 2 + card_index
             if 0 <= label_index < len(self.player_cards_labels):
                 card_label = self.player_cards_labels[label_index]
@@ -664,7 +663,8 @@ class BlackjackLogic:
         placeholder_img = self.get_card_image("default")
         self.dealer_card_label = tk.Label(self.gui.canvas, image=placeholder_img, bg="white")
         self.dealer_card_label.image = placeholder_img
-        self.dealer_card_label.place(relx=0.5, rely=0.1, anchor="center")
+        # Display dealer card slightly higher for clarity
+        self.dealer_card_label.place(relx=0.5, rely=0.07, anchor="center")
         self.dealer_card_label.bind("<Button-1>", lambda e: self.on_dealer_card_click())
 
     def get_card_image(self, card):
