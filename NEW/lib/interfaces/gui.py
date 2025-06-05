@@ -8,6 +8,7 @@ from ..common import constants
 from ..logic.monitor_utils import MonitorUtils
 from ..logic.background import BackgroundProcessor
 from ..player_boxes import generator as pbox_generator
+from .tooltip import ToolTip
 
 
 class GraphicalUserInterface(tk.Tk):
@@ -17,7 +18,15 @@ class GraphicalUserInterface(tk.Tk):
         super().__init__()
         self.title(constants.TITLE)
         self.geometry(constants.SIZE)
-        self.resizable(False, False)
+        self.resizable(True, True)
+
+        self.style = ttk.Style()
+        self.style.configure("TLabel", font=constants.DEFAULT_FONT)
+        self.style.configure("TButton", font=constants.DEFAULT_FONT)
+        self.style.configure("Status.TLabel", relief="sunken", anchor="w")
+
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
 
         self.reset_button = None
         self.background_processor = None
@@ -29,55 +38,114 @@ class GraphicalUserInterface(tk.Tk):
         self.monitor_utils = MonitorUtils()
 
         self.monitor_var = tk.StringVar()
-        self.monitor_selection_frame = ttk.Frame(self)
-        self.monitor_selection_frame.pack(padx=30, pady=20)
+
+        self.left_frame = ttk.Frame(self)
+        self.left_frame.grid(row=0, column=0, sticky="ns", padx=10, pady=10)
+        self.left_frame.columnconfigure(0, weight=1)
+        self.left_frame.rowconfigure(2, weight=1)
+
+        self.monitor_selection_frame = ttk.Frame(self.left_frame)
+        self.monitor_selection_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        self.monitor_selection_frame.columnconfigure(1, weight=1)
+
         self.monitor_label = ttk.Label(self.monitor_selection_frame, text="Select Monitor:")
-        self.monitor_label.pack(side=tk.LEFT)
-        self.monitor_combo = ttk.Combobox(self.monitor_selection_frame, textvariable=self.monitor_var, state="readonly")
-        self.monitor_combo.pack(side=tk.LEFT)
+        self.monitor_label.grid(row=0, column=0, sticky="w")
+        self.monitor_combo = ttk.Combobox(
+            self.monitor_selection_frame, textvariable=self.monitor_var, state="readonly"
+        )
+        self.monitor_combo.grid(row=0, column=1, sticky="ew")
 
         self.resolution_label = ttk.Label(self.monitor_selection_frame, text="Resolution: ")
-        self.resolution_label.pack(side=tk.LEFT)
+        self.resolution_label.grid(row=1, column=0, sticky="w")
         self.resolution_var = tk.StringVar()
-        self.resolution_display = ttk.Label(self.monitor_selection_frame, textvariable=self.resolution_var)
-        self.resolution_display.pack(side=tk.LEFT)
+        self.resolution_display = ttk.Label(
+            self.monitor_selection_frame, textvariable=self.resolution_var
+        )
+        self.resolution_display.grid(row=1, column=1, sticky="w")
 
-        self.confirm_button = ttk.Button(self.monitor_selection_frame, text="Confirm",
-                                         command=self.confirm_monitor_selection)
-        self.confirm_button.pack(side=tk.LEFT, padx=10)
+        self.confirm_button = ttk.Button(
+            self.monitor_selection_frame,
+            text="Confirm",
+            command=self.confirm_monitor_selection,
+        )
+        self.confirm_button.grid(row=2, column=0, columnspan=2, pady=5, sticky="ew")
+        ToolTip(self.confirm_button, "Confirm selected monitor")
 
-        self.pbox_gen_button = ttk.Button(self, text="Generate Player Boxes", command=self.pbox_generator.generate,
-                                          state=tk.DISABLED)
-        self.pbox_gen_button.pack(padx=30, pady=20)
+        self.action_frame = ttk.Frame(self.left_frame)
+        self.action_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
 
-        self.start_button = ttk.Button(self, text="Start", command=self.start)
-        self.start_button.pack(pady=30)
+        self.pbox_gen_button = ttk.Button(
+            self.action_frame,
+            text="Generate Player Boxes",
+            command=self.pbox_generator.generate,
+            state=tk.DISABLED,
+        )
+        self.pbox_gen_button.grid(row=0, column=0, pady=5, sticky="ew")
 
-        self.reset_button = ttk.Button(self, text="Reset Round", command=self.reset_round)
-        self.reset_button.pack(pady=10)
+        self.start_button = ttk.Button(self.action_frame, text="Start", command=self.start)
+        self.start_button.grid(row=1, column=0, pady=5, sticky="ew")
 
-        self.refresh_button = ttk.Button(self, text="Refresh Counters", command=self.force_refresh_counters)
-        self.refresh_button.pack(pady=5)
+        self.reset_button = ttk.Button(self.action_frame, text="Reset Round", command=self.reset_round)
+        self.reset_button.grid(row=2, column=0, pady=5, sticky="ew")
 
-        self.round_label = ttk.Label(self, text=f"Round: 0", font=("Helvetica", 14))
-        self.round_label.place(x=10, y=5)
+        self.refresh_button = ttk.Button(
+            self.action_frame, text="Refresh Counters", command=self.force_refresh_counters
+        )
+        self.refresh_button.grid(row=3, column=0, pady=5, sticky="ew")
 
-        self.dealer_value_label = ttk.Label(self, text="Dealer has: ", font=("Helvetica", 14))
-        self.dealer_value_label.place(relx=1.0, rely=0.0, x=-50, y=0, anchor='ne')
+        self.counter_container = ttk.LabelFrame(self.left_frame, text="Card Counters")
+        self.counter_container.grid(row=2, column=0, sticky="nsew")
+        self.counter_container.rowconfigure(0, weight=1)
+        self.counter_container.columnconfigure(0, weight=1)
 
-        self.counter_frame = ttk.LabelFrame(self, text="Card Counters")
-        self.counter_frame.pack(pady=10)
+        self.counter_canvas = tk.Canvas(self.counter_container, highlightthickness=0)
+        self.counter_scrollbar = ttk.Scrollbar(
+            self.counter_container, orient="vertical", command=self.counter_canvas.yview
+        )
+        self.counter_canvas.configure(yscrollcommand=self.counter_scrollbar.set)
+        self.counter_canvas.grid(row=0, column=0, sticky="nsew")
+        self.counter_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        self.counter_frame = ttk.Frame(self.counter_canvas)
+        self.counter_canvas.create_window((0, 0), window=self.counter_frame, anchor="nw")
+        self.counter_frame.bind(
+            "<Configure>",
+            lambda e: self.counter_canvas.configure(scrollregion=self.counter_canvas.bbox("all")),
+        )
+
+        self.round_label = ttk.Label(self, text=f"Round: 0", font=constants.LARGE_FONT)
+        self.round_label.grid(row=0, column=1, sticky="ne", padx=10, pady=5)
+
+        self.dealer_value_label = ttk.Label(self, text="Dealer has: ", font=constants.LARGE_FONT)
+        self.dealer_value_label.grid(row=0, column=1, sticky="nw", padx=10, pady=5)
 
         self.card_counter_widgets = {}
         self.create_card_counter_widgets()
 
         self.canvas = tk.Canvas(self, bg="#ffffff")
-        self.canvas.pack(fill=tk.BOTH, expand=True, padx=30, pady=20)
+        self.canvas.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
+
+        self.decision_frame = ttk.Frame(self)
+        self.decision_frame.grid(row=1, column=1, sticky="ew", padx=10)
+
+        self.status_var = tk.StringVar(value="Ready")
+        self.status_bar = ttk.Label(self, textvariable=self.status_var, style="Status.TLabel")
+        self.status_bar.grid(row=2, column=0, columnspan=2, sticky="ew")
+
+        ToolTip(self.start_button, "Start detection and analysis")
+        ToolTip(self.reset_button, "Reset current round")
+        ToolTip(self.refresh_button, "Refresh card counters")
+        ToolTip(self.pbox_gen_button, "Generate player regions on the monitor")
 
         self.draw_canvas()
         self.populate_monitors()
 
         self.bind("<Configure>", self.on_resize)
+
+    def set_status(self, message):
+        self.status_var.set(message)
 
     def draw_canvas(self):
         self.canvas.create_rectangle(50, 50, 200, 100, fill="black", outline="white")
@@ -118,16 +186,22 @@ class GraphicalUserInterface(tk.Tk):
                     for label in self.player_decision_labels[player_num]:
                         label.destroy()
 
-                decision_label = tk.Label(self.canvas, text=f"{decisions['decision']}", fg="green",
-                                          font=("Helvetica", 12, "bold"))
-                second_label = tk.Label(self.canvas, text=f"Optimal: {decisions['second']}", fg="blue",
-                                        font=("Helvetica", 10, "bold"))
+                decision_label = ttk.Label(
+                    self.decision_frame,
+                    text=f"{decisions['decision']}",
+                    foreground="green",
+                    font=constants.LARGE_FONT,
+                )
+                second_label = ttk.Label(
+                    self.decision_frame,
+                    text=f"Optimal: {decisions['second']}",
+                    foreground="blue",
+                    font=constants.DEFAULT_FONT,
+                )
 
-                x = 50 + (player_num - 1) * (constants.CARD_WIDTH + constants.CARD_SPACING)
-                y = 280
-
-                self.canvas.create_window(x, y, anchor="nw", window=decision_label)
-                self.canvas.create_window(x, y + 25, anchor="nw", window=second_label)
+                col = player_num - 1
+                decision_label.grid(row=0, column=col, padx=5)
+                second_label.grid(row=1, column=col, padx=5)
 
                 self.player_decision_labels[player_num] = [decision_label, second_label]
 
@@ -154,15 +228,27 @@ class GraphicalUserInterface(tk.Tk):
 
             label_text = f"{card}: 0x"
 
-            minus_btn = tk.Button(self.counter_frame, text="-", fg="white", bg="red", width=3,
-                                  command=lambda c=card: self.adjust_card_count(c, -1))
+            minus_btn = tk.Button(
+                self.counter_frame,
+                text="-",
+                fg="white",
+                bg="red",
+                width=3,
+                command=lambda c=card: self.adjust_card_count(c, -1),
+            )
             minus_btn.grid(row=row, column=col)
 
-            label = tk.Label(self.counter_frame, text=label_text, width=10, anchor="w")
-            label.grid(row=row, column=col + 1)
+            label = ttk.Label(self.counter_frame, text=label_text, width=10, anchor="w")
+            label.grid(row=row, column=col + 1, padx=2)
 
-            plus_btn = tk.Button(self.counter_frame, text="+", fg="white", bg="green", width=3,
-                                 command=lambda c=card: self.adjust_card_count(c, 1))
+            plus_btn = tk.Button(
+                self.counter_frame,
+                text="+",
+                fg="white",
+                bg="green",
+                width=3,
+                command=lambda c=card: self.adjust_card_count(c, 1),
+            )
             plus_btn.grid(row=row, column=col + 2)
 
             self.card_counter_widgets[card] = label
@@ -191,7 +277,7 @@ class GraphicalUserInterface(tk.Tk):
 
     def clear_screen(self):
         self.canvas.delete("all")
-        print("Screen cleared.")
+        self.set_status("Screen cleared")
 
     def force_refresh_counters(self):
         if self.background_processor and self.background_processor.blackjack_logic:
@@ -207,7 +293,7 @@ class GraphicalUserInterface(tk.Tk):
             self.update_idletasks()
             self.update()
 
-            print("[REFRESH] Counter labels updated manually.")
+            self.set_status("Counters refreshed")
 
     def start(self):
         if not self.monitor_utils.monitor:
@@ -220,6 +306,8 @@ class GraphicalUserInterface(tk.Tk):
             self.background_processor.blackjack_logic.set_monitor(self.monitor_utils.monitor)
         self.background_processor.start()
 
+        self.set_status("Background processing started")
+
         if not self.background_processor:
             self.background_processor = BackgroundProcessor(self.update_ui_callback, self)
             self.background_processor.blackjack_logic.set_monitor(self.monitor_utils.monitor)
@@ -227,6 +315,7 @@ class GraphicalUserInterface(tk.Tk):
     def reset_round(self):
         if self.background_processor and self.background_processor.blackjack_logic:
             threading.Thread(target=self.run_reset_process, daemon=True).start()
+            self.set_status("Round reset")
 
     def run_reset_process(self):
         self.background_processor.blackjack_logic.reset_for_new_round()
@@ -243,6 +332,8 @@ class GraphicalUserInterface(tk.Tk):
             logic = self.background_processor.blackjack_logic
             decisions = logic.get_current_player_decisions()
             self.update_player_decision_labels(decisions)
+
+            self.set_status("UI updated")
 
             for label in self.card_counter_widgets.values():
                 label.update_idletasks()
