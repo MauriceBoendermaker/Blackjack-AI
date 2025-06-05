@@ -37,11 +37,12 @@ class PlayerBoxGenerator:
         img.save(constants.INPUT_SCREENSHOT_PATH)
 
         self.model_players.predict(
-            constants.INPUT_SCREENSHOT_PATH, confidence=constants.PREDICTION_CONFIDENCE_PLAYERS,
-            overlap=constants.PREDICTION_OVERLAP_PLAYERS
+            constants.INPUT_SCREENSHOT_PATH,
+            confidence=constants.PREDICTION_CONFIDENCE_PLAYERS,
+            overlap=constants.PREDICTION_OVERLAP_PLAYERS,
         ).save(constants.OUTPUT_PREDICTION_PATH)
 
-        return self.monitor_utils.capture_screen().width, self.monitor_utils.capture_screen().height
+        return img.width, img.height
 
     def _draw_player_regions_on_image(self, image_path, player_regions):
         img = cv2.imread(image_path)

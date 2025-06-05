@@ -288,10 +288,7 @@ class GraphicalUserInterface(tk.Tk):
                 count = card_utils.card_counters.get(mapped, 0)
                 label.config(text=f"{card_name}: {count}x")
 
-            self.counter_frame.update_idletasks()
-            self.counter_frame.update()
-            self.update_idletasks()
-            self.update()
+
 
             self.set_status("Counters refreshed")
 
@@ -335,6 +332,4 @@ class GraphicalUserInterface(tk.Tk):
 
             self.set_status("UI updated")
 
-            for label in self.card_counter_widgets.values():
-                label.update_idletasks()
-                label.update()
+
