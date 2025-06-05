@@ -5,6 +5,7 @@ import time
 import tempfile
 import threading
 import requests
+from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 
 from tkinter import font
@@ -70,6 +71,8 @@ class BlackjackLogic:
             lambda: BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD)
         self.player_decisions = {}
         self.card_image_cache = {}
+        self.recommendation_cache = {}
+        self.recommendation_executor = ThreadPoolExecutor(max_workers=2)
         self.default_card_imgtk = None
 
         try:
@@ -79,8 +82,15 @@ class BlackjackLogic:
             print(f"Failed to load default image: {e}")
 
     def fetch_second_recommendation(self, player_cards, dealer_card):
-        card_count = {'2': 0, '3': 0, '4': 0, '5': 0, '6': 0, '7': 0, '8': 0, '9': 0,
-                      '10': 0, 'J': 0, 'Q': 0, 'K': 0, 'A': 0}
+        cache_key = (tuple(sorted(player_cards)), dealer_card)
+        if cache_key in self.recommendation_cache:
+            return self.recommendation_cache[cache_key]
+
+        card_count = {
+            '2': 0, '3': 0, '4': 0, '5': 0, '6': 0,
+            '7': 0, '8': 0, '9': 0,
+            '10': 0, 'J': 0, 'Q': 0, 'K': 0, 'A': 0
+        }
 
         for card in player_cards:
             value = card.split(' ')[0]
@@ -108,7 +118,11 @@ class BlackjackLogic:
         }
 
         try:
-            response = requests.get("https://wizardofodds.com/calculators-js/blackjack/calculate/", params=params)
+            response = requests.get(
+                "https://wizardofodds.com/calculators-js/blackjack/calculate/",
+                params=params,
+                timeout=5,
+            )
             data = response.json()
         except Exception as e:
             print(f"API fetch failed: {e}")
@@ -129,7 +143,9 @@ class BlackjackLogic:
 
         sorted_actions = sorted(available_actions.items(), key=lambda x: x[1], reverse=True)
         best_action, best_ev = sorted_actions[0]
-        return f"{best_action} ({best_ev:.3f})", dict(sorted_actions)
+        result = (f"{best_action} ({best_ev:.3f})", dict(sorted_actions))
+        self.recommendation_cache[cache_key] = result
+        return result
 
     def draw_predictions(self, image, predictions, output_path):
         draw = ImageDraw.Draw(image)
@@ -174,65 +190,72 @@ class BlackjackLogic:
         scale_x, scale_y = self.monitor_utils.get_scaling_factors(constants.BASE_RESOLUTION, current_resolution)
         self.player_regions = self.monitor_utils.scale_player_regions(constants.BASE_PLAYER_REGIONS, scale_x, scale_y)
 
-        while True:
-            self.initialize_screenshot()
+        self.initialize_screenshot()
 
-            dealer_area = self.captured_screenshot.crop((constants.DEALER_AREA_LEFT,
-                                                         constants.DEALER_AREA_UPPER,
-                                                         constants.DEALER_AREA_RIGHT,
-                                                         constants.DEALER_AREA_LOWER))
+        dealer_area = self.captured_screenshot.crop(
+            (
+                constants.DEALER_AREA_LEFT,
+                constants.DEALER_AREA_UPPER,
+                constants.DEALER_AREA_RIGHT,
+                constants.DEALER_AREA_LOWER,
+            )
+        )
 
-            debug_image_path = "dealer_area_current_view.jpg"
-            dealer_area.save(debug_image_path)
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
+            dealer_temp_path = temp_file.name
+            dealer_area.save(dealer_temp_path)
 
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
-                temp_file_path = temp_file.name
-                dealer_area.save(temp_file_path)
+        try:
+            predictions_dealer = self.model_dealer.predict(
+                dealer_temp_path,
+                confidence=constants.PREDICTION_CONFIDENCE_DEALER,
+                overlap=constants.PREDICTION_OVERLAP_DEALER
+            ).json()['predictions']
+        except Exception as e:
+            print(f"Dealer prediction failed: {e}")
+            predictions_dealer = []
 
-            predictions_dealer = self.model_dealer.predict(temp_file_path,
-                                                           confidence=constants.PREDICTION_CONFIDENCE_DEALER,
-                                                           overlap=constants.PREDICTION_OVERLAP_DEALER).json()[
-                'predictions']
+        self.draw_predictions(dealer_area, predictions_dealer, None)
 
-            self.draw_predictions(dealer_area, predictions_dealer, "dealer_area_with_predictions.jpg")
+        print(f"Raw dealer predictions: {predictions_dealer}")
 
-            # Debug: Print the raw predictions
-            print(f"Raw dealer predictions: {predictions_dealer}")
+        dealer_card = []
+        for prediction in predictions_dealer:
+            class_label = prediction.get('class')
+            card_name = card_mappings.dealer_class_mapping.get(class_label, "Unknown")
+            dealer_card.append(card_name)
 
-            dealer_card = []
-            for prediction in predictions_dealer:
-                class_label = prediction.get('class')
-                card_name = card_mappings.dealer_class_mapping.get(class_label, "Unknown")
-                dealer_card.append(card_name)
+        print(f"Dealer card: {dealer_card}")
+        self.dealer_up_card = dealer_card[0] if dealer_card else "Unknown"
+        print(f"Updated dealer's card: {self.dealer_up_card}")
+        self.update_dealer_card_display(dealer_card)
 
-            print(f"Dealer card: {dealer_card}")
-            self.dealer_up_card = dealer_card[0] if dealer_card else "Unknown"
-            print(f"Updated dealer's card: {self.dealer_up_card}")
-            self.update_dealer_card_display(dealer_card)
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
+            player_temp_path = temp_file.name
+            self.captured_screenshot.save(player_temp_path)
 
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
-                temp_file_path = temp_file.name
-                self.captured_screenshot.save(temp_file_path)
+        try:
+            predictions_players = self.model_players.predict(
+                player_temp_path,
+                confidence=constants.PREDICTION_CONFIDENCE_PLAYERS,
+                overlap=constants.PREDICTION_OVERLAP_PLAYERS
+            ).json()['predictions']
+        except Exception as e:
+            print(f"Player prediction failed: {e}")
+            predictions_players = []
 
-            predictions_players = self.model_players.predict(temp_file_path,
-                                                             confidence=constants.PREDICTION_CONFIDENCE_PLAYERS,
-                                                             overlap=constants.PREDICTION_OVERLAP_PLAYERS).json()[
-                'predictions']
+        self.draw_predictions(self.captured_screenshot, predictions_players, None)
 
-            full_screenshot_with_predictions_path = "full_screenshot_with_predictions.jpg"
-            self.draw_predictions(self.captured_screenshot, predictions_players, full_screenshot_with_predictions_path)
+        print(f"{len(predictions_players)} predictions")
 
-            print(f"{len(predictions_players)} predictions")
+        for player_index, region in enumerate(self.player_regions):
+            self.process_player_predictions(predictions_players, player_index, region)
 
-            for player_index, region in enumerate(self.player_regions):
-                self.process_player_predictions(predictions_players, player_index, region)
+        self.card_utils.calculate_true_count()
+        self.process_player_decisions_and_print_info(self.initial_cards_received, self.dealer_up_card)
 
-            self.card_utils.calculate_true_count()
-            self.process_player_decisions_and_print_info(self.initial_cards_received, self.dealer_up_card)
-
-            os.unlink(temp_file_path)
-
-            self.gui.update()
+        os.unlink(dealer_temp_path)
+        os.unlink(player_temp_path)
 
     def process_player_predictions(self, predictions, player_index, region):
         state = self.detection_states[player_index]
@@ -471,11 +494,17 @@ class BlackjackLogic:
 
             def fetch_and_display():
                 second_recommendation, _ = self.fetch_second_recommendation(cards, dealer_up_card)
-                self.gui.after(0, lambda: self.create_second_decision_label(second_recommendation,
-                                                                            start_x + column_width // 2,
-                                                                            card_display_y + 35, player_number))
+                self.gui.after(
+                    0,
+                    lambda: self.create_second_decision_label(
+                        second_recommendation,
+                        start_x + column_width // 2,
+                        card_display_y + 35,
+                        player_number,
+                    ),
+                )
 
-            threading.Thread(target=fetch_and_display, daemon=True).start()
+            self.recommendation_executor.submit(fetch_and_display)
 
     def create_colored_labels(self, prefix, text, color, x, y, anchor="n"):
         player_number = int(x // (constants.CARD_WIDTH + constants.CARD_SPACING))
