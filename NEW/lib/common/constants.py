@@ -1,10 +1,8 @@
 VERSION = "1.9"
 TITLE = f"Blackjack AI - v{VERSION}"
-# Increased width to allow all player boxes to fit on screen comfortably
 SIZE = "1600x1000"
 RESOLUTION = "2560x1440"
 
-# Font configuration
 FONT_FAMILY = "Helvetica"
 FONT_SIZE_SMALL = 10
 FONT_SIZE_NORMAL = 12
@@ -15,7 +13,6 @@ SMALL_FONT = (FONT_FAMILY, FONT_SIZE_SMALL)
 LARGE_FONT = (FONT_FAMILY, FONT_SIZE_LARGE, "bold")
 TOOLTIP_FONT = (FONT_FAMILY, FONT_SIZE_SMALL)
 
-# Color scheme
 PRIMARY_COLOR = "#000000"
 HIGHLIGHT_COLOR = "#3366cc"
 ERROR_COLOR = "#ff0000"
@@ -31,31 +28,27 @@ BASE_PLAYER_REGIONS = [
     [[1940, 1236], [2072, 1096], [1572, 840], [1572, 940], [1940, 1236]]
 ]
 
-# Roboflow API
 ROBOFLOW_API_KEY = "WBy7jG6AiiqjzifOfiNH"
 
-# Initializes Roboflow API for Player Card detection
 PROJECT_ID_PLAYERS = "dey022"
 MODEL_VERSION_PLAYERS = 1
 PREDICTION_CONFIDENCE_PLAYERS = 70
 PREDICTION_OVERLAP_PLAYERS = 100
 
-# Initializes Roboflow API for Dealer Card detection
 PROJECT_ID_DEALER = "carddetection-v1hqz"
 MODEL_VERSION_DEALER = 17
 PREDICTION_CONFIDENCE_DEALER = 55
 PREDICTION_OVERLAP_DEALER = 45
 
-# File paths
 CARD_FOLDER_PATH = "../api/cards"
 DEFAULT_CARD_IMAGE_PATH = "../api/cards/red card.jpg"
 INPUT_SCREENSHOT_PATH = "INPUT_current_screen.jpg"
+INPUT_DEALER_PATH = "INPUT_dealer_area.jpg"
 OUTPUT_PREDICTION_PATH = "OUTPUT_prediction.jpg"
 OUTPUT_FINAL_PREDICTION_PATH = "OUTPUT_final_prediction_with_players.jpg"
 OUTPUT_DEBUG_IMAGE_PATH = "OUTPUT_dealer_area_current_view.jpg"
 CSV_FILE_PATH = "lib/Blackjack cheat sheet table.csv"
 
-# Mapping
 CARD_VALUES = ["Ace", "10", "9", "8", "7", "6", "5", "4", "3", "2"]
 
 VALUE_MAPPING = {
@@ -71,7 +64,7 @@ VALUE_MAPPING = {
     'Jack': 10,
     'Queen': 10,
     'King': 10,
-    'Ace': 11  # Ace can be 1 or 11, but typically counted as 11 for simplicity
+    'Ace': 11
 }
 
 ACTION_MAPPING = {
@@ -94,18 +87,20 @@ ACTION_COLORS = {
     "R/H": "red"
 }
 
-# Misc
 BASE_BET = 10
 DECK_COUNT = 8
 
-# Card dimensions
 CARD_WIDTH = 73
 CARD_HEIGHT = 98
 CARD_SPACING = 40
 
-# Dealer's card detection area
 DEALER_AREA_LEFT = 1548
 DEALER_AREA_UPPER = 12
 DEALER_AREA_WIDTH, DEALER_AREA_HEIGHT = 1000, 800
-DEALER_AREA_RIGHT = DEALER_AREA_LEFT + DEALER_AREA_WIDTH  # Calculate the right boundary
-DEALER_AREA_LOWER = DEALER_AREA_UPPER + DEALER_AREA_HEIGHT  # Calculate the lower boundary
+DEALER_AREA_RIGHT = DEALER_AREA_LEFT + DEALER_AREA_WIDTH
+DEALER_AREA_LOWER = DEALER_AREA_UPPER + DEALER_AREA_HEIGHT
+
+DEBUG_MODE = False
+PRODUCER_SLEEP = 0.9
+QUEUE_POLL_MS = 120
+RECOMMENDATION_DEBOUNCE_MS = 1200
