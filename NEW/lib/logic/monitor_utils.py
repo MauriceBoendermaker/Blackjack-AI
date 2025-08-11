@@ -3,7 +3,6 @@ from mss import mss
 from PIL import Image
 from matplotlib.path import Path
 
-
 class MonitorUtils:
     def __init__(self):
         self.monitor = None
@@ -16,7 +15,6 @@ class MonitorUtils:
     def capture_screen(self):
         if self.monitor is None:
             raise ValueError("Monitor not set. Please select a monitor before capturing the screen.")
-
         monitor_info = self.monitor
         monitor = {
             "left": monitor_info.x,
@@ -50,3 +48,13 @@ class MonitorUtils:
                 scaled_vertices.append(scaled_vertex)
             scaled_player_regions.append(Path(np.array(scaled_vertices)))
         return scaled_player_regions
+
+    def path_bounding_rect(self, path_obj: Path):
+        verts = path_obj.vertices
+        xs = verts[:, 0]
+        ys = verts[:, 1]
+        left = float(xs.min())
+        top = float(ys.min())
+        right = float(xs.max())
+        bottom = float(ys.max())
+        return int(left), int(top), int(right), int(bottom)
