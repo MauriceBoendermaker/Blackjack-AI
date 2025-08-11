@@ -6,7 +6,6 @@ from ..common import constants
 from .card_utils import get_card_utils
 from .blackjack import BlackjackLogic
 
-
 class BackgroundProcessor:
     def __init__(self, update_ui_callback, gui):
         self.gui = gui
@@ -17,20 +16,20 @@ class BackgroundProcessor:
 
     def start(self):
         threading.Thread(target=self.background_processing, daemon=True).start()
-        self.gui.after(100, self.check_for_updates)
+        self.gui.after(constants.QUEUE_POLL_MS, self.check_for_updates)
 
     def background_processing(self):
         while True:
             self.blackjack_logic.capture_screen_and_track_cards()
             self.update_queue.put("update")
-            time.sleep(0.5)
+            time.sleep(constants.PRODUCER_SLEEP)
 
     def check_for_updates(self):
         while not self.update_queue.empty():
             data = self.update_queue.get_nowait()
             if data == "update":
                 self.update_ui_callback()
-        self.gui.after(500, self.check_for_updates)
+        self.gui.after(constants.QUEUE_POLL_MS, self.check_for_updates)
 
     def update_gui_from_queue(self):
         try:
@@ -39,4 +38,4 @@ class BackgroundProcessor:
                 if data == "update":
                     self.update_ui_callback()
         finally:
-            self.gui.after(100, self.update_gui_from_queue)
+            self.gui.after(constants.QUEUE_POLL_MS, self.update_gui_from_queue)
