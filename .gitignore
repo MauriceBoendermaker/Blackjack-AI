@@ -7,5 +7,5 @@ __pycache__
 .idea/modules.xml
 .idea/vcs.xml
 
-.png
-.jpg
+*.png
+*.jpg
