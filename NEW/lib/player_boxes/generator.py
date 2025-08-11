@@ -10,11 +10,11 @@ from ..common import constants
 from ..logic.utils import Utils
 from ..logic.monitor_utils import MonitorUtils
 
-
 class PlayerBoxGenerator:
     def __init__(self, gui):
         self.gui = gui
-        self.model_players = Utils.initialize_player_model(self)
+        self.utils = Utils()
+        self.model_players = self.utils.initialize_player_model()
         self.current_image_path = None
         self.monitor_utils = MonitorUtils()
         self._thread_lock = threading.Lock()
@@ -23,7 +23,6 @@ class PlayerBoxGenerator:
         self.monitor_utils.set_monitor(monitor)
 
     def generate_async(self):
-        # Run generation in a background thread to keep the UI responsive
         if self._thread_lock.locked():
             return
         threading.Thread(target=self._generate, daemon=True).start()
@@ -33,7 +32,6 @@ class PlayerBoxGenerator:
             if not self.monitor_utils.monitor:
                 messagebox.showerror("Error", "Monitor not selected.")
                 return
-
             self.gui.set_status("Capturing screenshot...")
             current_resolution = self._capture_screen_and_predict()
             scale_x, scale_y = self.monitor_utils.get_scaling_factors(constants.BASE_RESOLUTION, current_resolution)
@@ -46,13 +44,11 @@ class PlayerBoxGenerator:
     def _capture_screen_and_predict(self):
         img = self.monitor_utils.capture_screen()
         img.save(constants.INPUT_SCREENSHOT_PATH)
-
         self.model_players.predict(
             constants.INPUT_SCREENSHOT_PATH,
             confidence=constants.PREDICTION_CONFIDENCE_PLAYERS,
             overlap=constants.PREDICTION_OVERLAP_PLAYERS,
         ).save(constants.OUTPUT_PREDICTION_PATH)
-
         return img.width, img.height
 
     def _draw_player_regions_on_image(self, image_path, player_regions):
@@ -60,15 +56,12 @@ class PlayerBoxGenerator:
         for region in player_regions:
             vertices = np.array([region.vertices], np.int32)
             cv2.polylines(img, vertices, isClosed=True, color=(255, 0, 0), thickness=2)
-
         final_image_path = constants.OUTPUT_FINAL_PREDICTION_PATH
         cv2.imwrite(final_image_path, img)
-        print(f"Saved final image with player regions to '{final_image_path}'")
 
     def _display_image(self, image_path):
         if image_path is None:
             return
-
         img = Image.open(image_path)
         window_width = self.gui.winfo_width()
         window_height = self.gui.winfo_height()
