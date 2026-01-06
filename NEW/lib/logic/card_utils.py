@@ -16,6 +16,17 @@ class CardUtils:
     def get_card_name(self, class_label):
         return class_mapping.get(class_label, "Unknown")
 
+    def is_valid_player_class(self, class_label):
+        name = class_mapping.get(class_label, "Unknown")
+        if name in ("Unknown", "Continue", "End Red", "GG", "G"):
+            return False
+        return name.endswith(("Hearts", "Diamonds", "Spades", "Clubs"))
+
+    def is_valid_player_card_name(self, card_name):
+        if card_name in ("Unknown", "Continue", "End Red", "GG", "G"):
+            return False
+        return card_name.endswith(("Hearts", "Diamonds", "Spades", "Clubs"))
+
     def get_all_card_names(self):
         suits = ['Spades', 'Hearts', 'Diamonds', 'Clubs']
         values = constants.VALUE_MAPPING.keys()
@@ -23,70 +34,53 @@ class CardUtils:
 
     def update_count(self, card_name):
         card_value_name = card_name.split(' ')[0]
-        print(f"[update_count] base: {card_value_name}")  # Debug print
-
+        print(f"[update_count] base: {card_value_name}")
         card_value = self.get_card_value(card_name)
         if card_value == 0:
             return
-
-        # Apply running count rules
         if 2 <= card_value <= 6:
             self.running_count += 1
         elif card_value in [10, 11]:
             self.running_count -= 1
-
         if card_value_name == "Ace":
             card_key = "Ace"
         elif card_value_name in ["Jack", "Queen", "King"]:
             card_key = "10"
         else:
             card_key = card_value_name
-
         self.card_counters[card_key] += 1
-
         print(f"Updated counter for {card_key}: {self.card_counters[card_key]}x")
-
         for label_key, label in self.card_counter_labels.items():
             display_base = label_key.split()[0]
             mapped_value = constants.VALUE_MAPPING.get(display_base, None)
             if mapped_value and str(mapped_value) == card_key:
                 if hasattr(label, 'winfo_toplevel'):
                     top = label.winfo_toplevel()
-                    top.after(0,
-                              lambda l=label, k=label_key, v=self.card_counters[card_key]: l.config(text=f"{k}: {v}x"))
+                    top.after(0, lambda l=label, k=label_key, v=self.card_counters[card_key]: l.config(text=f"{k}: {v}x"))
                 else:
                     label.config(text=f"{label_key}: {self.card_counters[card_key]}x")
 
     def update_card_counter(self, card_name, increment):
         card_value_name = card_name.split(' ')[0]
-
         if card_value_name in constants.VALUE_MAPPING:
             card_value = constants.VALUE_MAPPING[card_value_name]
         else:
             print(f"Warning: Card value '{card_value_name}' not found in value mapping.")
             return
-
         if card_value_name == "Ace":
             card_value_str = "Ace"
         elif card_value_name in ["Jack", "Queen", "King"]:
             card_value_str = "10"
         else:
             card_value_str = card_value_name
-
         self.card_counters[card_value_str] += increment
-
         print(f"Updated counter for {card_value_str}: {self.card_counters[card_value_str]}x")
-
         for label_key, label in self.card_counter_labels.items():
             label_base = label_key.split(' ')[0]
-            if (
-                    label_base == card_value_name or
-                    constants.VALUE_MAPPING.get(label_base) == card_value
-            ):
+            if (label_base == card_value_name or constants.VALUE_MAPPING.get(label_base) == card_value):
                 try:
                     root = label.winfo_toplevel()
-                    root.after(0, lambda l=label, k=label_key, v=self.card_counters[card_value_str]: l.config(
-                        text=f"{k}: {v}x"))
+                    root.after(0, lambda l=label, k=label_key, v=self.card_counters[card_value_str]: l.config(text=f"{k}: {v}x"))
                 except Exception as e:
                     print(f"Failed to update label for {label_key}: {e}")
 
@@ -98,16 +92,9 @@ class CardUtils:
     def get_card_value(self, card_name):
         if card_name == '-':
             return 0
-
         if isinstance(card_name, int):
             return card_name
-
-        face_values = {
-            'Jack': 10,
-            'Queen': 10,
-            'King': 10,
-            'Ace': 11
-        }
+        face_values = {'Jack': 10, 'Queen': 10, 'King': 10, 'Ace': 11}
         card_value_name = card_name.split()[0]
         if card_value_name in face_values:
             return face_values[card_value_name]
@@ -124,7 +111,14 @@ class CardUtils:
             print(f" {value} => {count}x")
 
     def get_dealer_card_value(self, card):
-        card_value = card.split(' ')[0].capitalize()
+        v = str(card).strip().upper()
+        if v in {"J", "Q", "K"}:
+            return "10"
+        if v == "A":
+            return "A"
+        if v in {"10", "9", "8", "7", "6", "5", "4", "3", "2"}:
+            return v
+        card_value = v.split(' ')[0].capitalize()
         if card_value in ["Jack", "Queen", "King"]:
             return "10"
         elif card_value == "Ace":
@@ -138,20 +132,16 @@ class CardUtils:
         hand_value = self.calculate_hand_value(cards)
         cards_info = " // ".join([f"[{i + 1}] {card}" for i, card in enumerate(cards)])
         recommendation_text = ", ".join([action[0] for action in recommendation])
-        print(
-            f"P{player_index + 1}: {cards_info}. Card value is {hand_value}. Recommended action: {recommendation_text}.")
+        print(f"P{player_index + 1}: {cards_info}. Card value is {hand_value}. Recommended action: {recommendation_text}.")
 
     def get_hand_representation(self, cards):
         if self.is_pair_hand(cards):
             pair_value = str(self.get_card_value(cards[0].split(' ')[0]))
             pair_value = "10" if pair_value in ["Jack", "Queen", "King"] else pair_value
             return f"{pair_value},{pair_value}"
-
         if self.is_soft_hand(cards):
-            non_ace_total = sum(
-                [self.get_card_value(card.split(' ')[0]) for card in cards if card.split(' ')[0] != 'Ace'])
+            non_ace_total = sum([self.get_card_value(card.split(' ')[0]) for card in cards if card.split(' ')[0] != 'Ace'])
             return f"A,{non_ace_total}"
-
         hand_total = self.calculate_hand_value(cards)
         return str(hand_total)
 
@@ -163,11 +153,9 @@ class CardUtils:
             if card_value == 11:
                 ace_count += 1
             total += card_value
-
         while total > 21 and ace_count:
             total -= 10
             ace_count -= 1
-
         return total
 
     def is_soft_hand(self, cards):

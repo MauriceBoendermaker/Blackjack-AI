@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 
 from tkinter import font
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from PIL import Image, ImageTk
 
@@ -40,6 +40,7 @@ class BlackjackLogic:
         self.detected_card = {}
         self.blackjack_strategy = {}
         self.load_strategy()
+        self.create_dealer_card_placeholder()
         self.lock = threading.Lock()
         self.cards_info = []
         self.recommendations = []
@@ -64,24 +65,47 @@ class BlackjackLogic:
         self.locked_cards = defaultdict(set)
         self.manually_replaced_cards = defaultdict(set)
         self.player_regions = []
-        self.player_region_rects = []
         self.detection_states = defaultdict(lambda: BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD)
         self.player_decisions = {}
         self.card_image_cache = {}
         self.recommendation_cache = {}
         self.recommendation_executor = ThreadPoolExecutor(max_workers=2)
         self.default_card_imgtk = None
+
+        self.dealer_locked = False
+        self.dealer_history = deque(maxlen=5)
+        self.dealer_missing_frames = 0
         self.last_dealer_displayed = None
-        self.last_recommendation_time = {}
-        self.recommendation_inflight = {}
 
         try:
             default_img = Image.open(constants.DEFAULT_CARD_IMAGE_PATH).resize((60, 90))
             self.default_card_imgtk = ImageTk.PhotoImage(default_img)
-        except Exception:
-            self.default_card_imgtk = None
+        except Exception as e:
+            print(f"Failed to load default image: {e}")
 
-        self.create_dealer_card_placeholder()
+    def _select_stable_dealer_label(self, predictions):
+        from ..common.card_mappings import dealer_class_mapping2
+        candidates = []
+        for p in predictions:
+            cls = str(p.get('class'))
+            if cls == 'cuttingcard':
+                continue
+            name = dealer_class_mapping2.get(cls, "Unknown")
+            if name == "Unknown":
+                continue
+            candidates.append((name, float(p.get('confidence', 0.0))))
+        if not candidates:
+            self.dealer_missing_frames += 1
+            if self.dealer_missing_frames < 8:
+                return self.dealer_up_card
+            return None
+        best = max(candidates, key=lambda x: x[1])[0]
+        self.dealer_history.append(best)
+        self.dealer_missing_frames = 0
+        most = max(set(self.dealer_history), key=self.dealer_history.count)
+        if self.dealer_history.count(most) >= 2:
+            return most
+        return self.dealer_up_card
 
     def fetch_second_recommendation(self, player_cards, dealer_card, player_number):
         cache_key = (tuple(player_cards), dealer_card)
@@ -118,12 +142,6 @@ class BlackjackLogic:
     def draw_predictions(self, image, predictions, output_path):
         if not constants.DEBUG_MODE:
             return
-        img = image.copy()
-        for p in predictions:
-            if {'x','y','width','height'}.issubset(p.keys()):
-                x, y, w, h = p['x'], p['y'], p['width'], p['height']
-                x1, y1, x2, y2 = int(x), int(y), int(x+w), int(y+h)
-                cv = cv2.cvtColor(cv2.cvtColor(cv2.imread(constants.DEFAULT_CARD_IMAGE_PATH), cv2.COLOR_BGR2RGB), cv2.COLOR_RGB2BGR)
         if output_path:
             try:
                 image.save(output_path)
@@ -157,49 +175,50 @@ class BlackjackLogic:
         self.player_region_rects = [self.monitor_utils.path_bounding_rect(p) for p in self.player_regions]
 
     def capture_screen_and_track_cards(self):
+        current_resolution = self.monitor_utils.get_current_resolution()
+        scale_x, scale_y = self.monitor_utils.get_scaling_factors(constants.BASE_RESOLUTION, current_resolution)
+        self.player_regions = self.monitor_utils.scale_player_regions(constants.BASE_PLAYER_REGIONS, scale_x, scale_y)
+
         self.initialize_screenshot()
-        dealer_area = self.captured_screenshot.crop(
-            (constants.DEALER_AREA_LEFT, constants.DEALER_AREA_UPPER, constants.DEALER_AREA_RIGHT, constants.DEALER_AREA_LOWER)
-        )
+
+        d_left = int(constants.DEALER_AREA_LEFT * scale_x)
+        d_top = int(constants.DEALER_AREA_UPPER * scale_y)
+        d_right = int((constants.DEALER_AREA_LEFT + constants.DEALER_AREA_WIDTH) * scale_x)
+        d_bottom = int((constants.DEALER_AREA_UPPER + constants.DEALER_AREA_HEIGHT) * scale_y)
+        dealer_area = self.captured_screenshot.crop((d_left, d_top, d_right, d_bottom))
+        dealer_area.save(constants.INPUT_DEALER_PATH)
+
+        predictions_dealer = []
+        if not self.dealer_locked:
+            try:
+                predictions_dealer = self.model_dealer.predict(
+                    constants.INPUT_DEALER_PATH,
+                    confidence=constants.PREDICTION_CONFIDENCE_DEALER,
+                    overlap=constants.PREDICTION_OVERLAP_DEALER
+                ).json()['predictions']
+            except Exception:
+                predictions_dealer = []
+
+        dealer_label = self._select_stable_dealer_label(predictions_dealer)
+        if dealer_label is not None:
+            self.dealer_up_card = dealer_label
+            if self.dealer_up_card != self.last_dealer_displayed:
+                self.update_dealer_card_display([self.dealer_up_card])
+                self.last_dealer_displayed = self.dealer_up_card
+
+        self.captured_screenshot.save(constants.INPUT_FULL_PATH)
         try:
-            dealer_area.save(constants.INPUT_DEALER_PATH)
-            predictions_dealer = self.model_dealer.predict(
-                constants.INPUT_DEALER_PATH,
-                confidence=constants.PREDICTION_CONFIDENCE_DEALER,
-                overlap=constants.PREDICTION_OVERLAP_DEALER
+            predictions_players = self.model_players.predict(
+                constants.INPUT_FULL_PATH,
+                confidence=constants.PREDICTION_CONFIDENCE_PLAYERS,
+                overlap=constants.PREDICTION_OVERLAP_PLAYERS
             ).json()['predictions']
         except Exception:
-            predictions_dealer = []
-        dealer_card = []
-        for prediction in predictions_dealer:
-            class_label = prediction.get('class')
-            card_name = card_mappings.dealer_class_mapping.get(class_label, "Unknown")
-            dealer_card.append(card_name)
-        self.dealer_up_card = dealer_card[0] if dealer_card else "Unknown"
-        if self.dealer_up_card != self.last_dealer_displayed:
-            self.update_dealer_card_display(dealer_card)
-            self.last_dealer_displayed = self.dealer_up_card
-        predictions_players = []
-        for idx, rect in enumerate(self.player_region_rects):
-            l, t, r, b = rect
-            crop = self.captured_screenshot.crop((l, t, r, b))
-            path = f"INPUT_player_{idx}.jpg"
-            try:
-                crop.save(path)
-                preds = self.model_players.predict(
-                    path,
-                    confidence=constants.PREDICTION_CONFIDENCE_PLAYERS,
-                    overlap=constants.PREDICTION_OVERLAP_PLAYERS
-                ).json()['predictions']
-                for p in preds:
-                    p2 = dict(p)
-                    p2['x'] = p['x'] + l
-                    p2['y'] = p['y'] + t
-                    predictions_players.append(p2)
-            except Exception:
-                continue
+            predictions_players = []
+
         for player_index, region in enumerate(self.player_regions):
             self.process_player_predictions(predictions_players, player_index, region)
+
         self.card_utils.calculate_true_count()
         self.process_player_decisions_and_print_info(self.initial_cards_received, self.dealer_up_card)
 
@@ -207,18 +226,27 @@ class BlackjackLogic:
         state = self.detection_states[player_index]
         if state == BlackjackLogic.DetectionState.SECOND_CARD_DETECTED:
             return
+
         best_card = None
-        best_confidence = 0
-        for prediction in predictions:
-            x, y = prediction['x'], prediction['y']
-            class_label = prediction['class']
-            confidence = prediction['confidence']
-            if region.contains_point([x, y]):
-                card_name = self.card_utils.get_card_name(class_label)
-                card_index = 0 if state == BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD else 1
-                if confidence > best_confidence and card_index not in self.locked_cards[player_index]:
-                    best_card = {'x': x, 'y': y, 'confidence': confidence, 'card_name': card_name}
-                    best_confidence = confidence
+        best_confidence = 0.0
+
+        for p in predictions:
+            x, y = p['x'], p['y']
+            w, h = p['width'], p['height']
+            cx = x + w / 2.0
+            cy = y + h / 2.0
+            if not region.contains_point([cx, cy]):
+                continue
+            class_label = str(p['class'])
+            if not self.card_utils.is_valid_player_class(class_label):
+                continue
+            confidence = float(p['confidence'])
+            card_name = self.card_utils.get_card_name(class_label)
+            card_index = 0 if state == BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD else 1
+            if confidence > best_confidence and card_index not in self.locked_cards[player_index]:
+                best_card = {'x': x, 'y': y, 'confidence': confidence, 'card_name': card_name}
+                best_confidence = confidence
+
         if best_card:
             self.card_handler.handle_card_detection(best_card['card_name'])
             if state == BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD:
@@ -242,7 +270,7 @@ class BlackjackLogic:
             )
             self.card_utils.counted_cards_this_round.add(identity_key)
         self.card_handler.print_all_cards(self.player_cards)
-        self.update_gui()
+        self.gui.after(0, self.update_gui)
 
     def update_if_higher_confidence(self, player_index, detected_card):
         if detected_card['confidence'] > max(self.player_cards[player_index]['confidences']):
@@ -324,7 +352,6 @@ class BlackjackLogic:
                 self.players_cards_data.append({'player_index': player_index, 'cards': cards})
         self.update_player_cards_display(self.players_cards_data, dealer_up_card, self.card_utils.true_count, constants.BASE_BET)
         if self.rounds_observed > 3:
-            betting_strategy = self.decision_making.bet_strategy(self.card_utils.true_count, constants.BASE_BET)
             pass
 
     def print_all_cards(self):
@@ -443,14 +470,16 @@ class BlackjackLogic:
         for widget in self.gui.winfo_children():
             if isinstance(widget, tk.Toplevel):
                 widget.destroy()
+
         def do_replacement():
             if player_index == "dealer":
                 if card_name == "-":
+                    self.dealer_locked = False
                     self.dealer_up_card = None
                     self.gui.after(0, lambda: self.update_dealer_card_display([]))
                 else:
-                    normalized_card = self.card_utils.get_dealer_card_value(card_name.split(' ')[0])
-                    self.dealer_up_card = normalized_card
+                    self.dealer_locked = True
+                    self.dealer_up_card = card_name.split(" of ")[0]
                     self.gui.after(0, lambda: self.update_dealer_card_display([card_name]))
                 return
             player = self.player_cards[player_index]
@@ -464,9 +493,12 @@ class BlackjackLogic:
                 player['confidences'][card_index] = 1.0
                 self.manually_replaced_cards[player_index].add(card_index)
                 self.locked_cards[player_index].add(card_index)
+
             def finish_update():
                 self.update_gui()
+
             self.gui.after(0, finish_update)
+
         threading.Thread(target=do_replacement, daemon=True).start()
 
     def refresh_player_card_image(self, player_index, card_index, card_name):
@@ -482,25 +514,31 @@ class BlackjackLogic:
 
     def update_dealer_card_display(self, dealer_cards):
         if dealer_cards:
-            card_face = dealer_cards[0]
-            card_image_path = constants.DEFAULT_CARD_IMAGE_PATH
-            for suit in ['hearts', 'diamonds', 'spades', 'clubs']:
-                potential_path = f"{constants.CARD_FOLDER_PATH}/{card_face.lower()}_of_{suit}.png"
-                if os.path.exists(potential_path):
-                    card_image_path = potential_path
-                    break
-            card_value = card_face
+            face = dealer_cards[0]
+            if " of " in str(face):
+                display_name = face
+            else:
+                display_name = f"{face} of Hearts" if face not in (None, "Unknown") else None
         else:
-            card_value = "No card detected"
-            card_image_path = constants.DEFAULT_CARD_IMAGE_PATH
+            display_name = None
+        if display_name:
+            try:
+                path = self.utils.generate_card_image_path(display_name)
+            except Exception:
+                path = constants.DEFAULT_CARD_IMAGE_PATH
+        else:
+            path = constants.DEFAULT_CARD_IMAGE_PATH
         try:
-            img = Image.open(card_image_path)
-            img = img.resize((100, 150))
+            img = Image.open(path).resize((100, 150))
             imgtk = ImageTk.PhotoImage(image=img)
-            self.dealer_card_label.config(image=imgtk)
-            self.dealer_card_label.image = imgtk
-        except Exception:
-            pass
+
+            def _apply():
+                self.dealer_card_label.config(image=imgtk)
+                self.dealer_card_label.image = imgtk
+
+            self.gui.after(0, _apply)
+        except Exception as e:
+            print(f"Error updating dealer card display: {e}")
 
     def create_dealer_card_placeholder(self):
         placeholder_img = self.get_card_image("default")
@@ -539,7 +577,13 @@ class BlackjackLogic:
         self.card_value_counts.clear()
         self.players_received_first_card.clear()
         self.card_utils.counted_cards_this_round.clear()
+        self.dealer_locked = False
+        self.dealer_history.clear()
+        self.dealer_missing_frames = 0
+        self.dealer_up_card = None
+        self.last_dealer_displayed = None
         self.round_count += 1
+        print("Reset for new round.")
 
     def reset_gui_elements(self):
         empty_image = tk.PhotoImage()
