@@ -1,6 +1,8 @@
 import os
 import cv2
 import csv
+import json
+import math
 import time
 import threading
 import requests
@@ -47,6 +49,7 @@ class BlackjackLogic:
         self.players_cards_data = []
         self.player_cards_labels = []
         self.players_decision_labels = defaultdict(list)
+        self.player_number_labels = {}  # Track player number labels to prevent duplicates
         self.first_card_detected = set()
         self.second_card_detected = set()
         self.players_received_first_card = set()
@@ -68,8 +71,11 @@ class BlackjackLogic:
         self.detection_states = defaultdict(lambda: BlackjackLogic.DetectionState.WAITING_FOR_FIRST_CARD)
         self.player_decisions = {}
         self.card_image_cache = {}
+        self.card_thumbnail_cache = {}
         self.recommendation_cache = {}
         self.recommendation_executor = ThreadPoolExecutor(max_workers=2)
+        self.last_recommendation_time = {}
+        self.recommendation_inflight = {}
         self.default_card_imgtk = None
 
         self.dealer_locked = False
@@ -77,11 +83,22 @@ class BlackjackLogic:
         self.dealer_missing_frames = 0
         self.last_dealer_displayed = None
 
+        # Performance monitoring
+        self.cycle_times = deque(maxlen=30)  # Track last 30 cycle times
+        self.last_cycle_time = time.time()
+        self.frame_count = 0
+
         try:
             default_img = Image.open(constants.DEFAULT_CARD_IMAGE_PATH).resize((60, 90))
             self.default_card_imgtk = ImageTk.PhotoImage(default_img)
         except Exception as e:
             print(f"Failed to load default image: {e}")
+
+        # Preload all card images in background for better performance
+        self.preload_card_images()
+
+        # Load cached recommendations from disk
+        self.load_recommendation_cache()
 
     def _select_stable_dealer_label(self, predictions):
         from ..common.card_mappings import dealer_class_mapping2
@@ -124,7 +141,8 @@ class BlackjackLogic:
                 'f': counts['7'],'g': counts['8'],'h': counts['9'],'i': counts['10'],'j': counts['A'],
                 'k': 0,'l': 1.5,'m': 1,'n': 1,'o': 0,'p': 1,'q': 1,'r': 0,'s': 0,'t': 1,'u': 6,'v': 44
             }
-            r = requests.get("https://wizardofodds.com/calculators-js/blackjack/calculate/", params=params, timeout=5)
+            # Reduced timeout from 5s to 2s for faster failure recovery
+            r = requests.get("https://wizardofodds.com/calculators-js/blackjack/calculate/", params=params, timeout=2)
             data = r.json()
         except Exception:
             return "Error", {}
@@ -221,6 +239,24 @@ class BlackjackLogic:
 
         self.card_utils.calculate_true_count()
         self.process_player_decisions_and_print_info(self.initial_cards_received, self.dealer_up_card)
+
+        # Log performance metrics
+        self.log_performance_metrics()
+
+        # Return detection activity state for adaptive sleep timing
+        # Check how many players are actively being dealt cards
+        active_dealing = sum(1 for state in self.detection_states.values()
+                           if state in [BlackjackLogic.DetectionState.WAITING_FOR_SECOND_CARD,
+                                       BlackjackLogic.DetectionState.FIRST_CARD_DETECTED])
+        all_complete = all(state == BlackjackLogic.DetectionState.SECOND_CARD_DETECTED
+                          for state in self.detection_states.values())
+
+        if active_dealing > 0:
+            return "active_dealing"  # Cards being dealt, check frequently
+        elif all_complete or self.dealer_up_card:
+            return "round_complete"  # Round finished, can slow down
+        else:
+            return "waiting"  # Waiting for cards, slower checks
 
     def process_player_predictions(self, predictions, player_index, region):
         state = self.detection_states[player_index]
@@ -366,48 +402,106 @@ class BlackjackLogic:
         self.card_utils.print_card_counts()
 
     def update_player_cards_display(self, player_data_list, dealer_up_card, true_count, base_bet):
-        start_y = 50
-        total_width = 7 * (constants.CARD_WIDTH + constants.CARD_SPACING) + 8
-        column_width = (total_width - 8) // 7
+        # Get canvas dimensions for semicircular layout
+        try:
+            canvas_width = self.gui.canvas.winfo_width()
+            canvas_height = self.gui.canvas.winfo_height()
+        except:
+            canvas_width = 800
+            canvas_height = 600
+
+        # Semicircle parameters for player positioning (bowl shape at bottom)
+        # Dynamic sizing based on canvas dimensions
+        CENTER_X = canvas_width / 2
+        CENTER_Y = canvas_height + (canvas_height * 0.3)  # Center below canvas for upward bowl
+        RADIUS = min(canvas_width * 0.45, canvas_height * 0.6)  # Scale with canvas size
+        ARC_SPAN_DEGREES = 90  # 90-degree arc for natural bowl shape
+        NUM_PLAYERS = 7
+
+        # Create player card labels if needed
         while len(self.player_cards_labels) < 14:
             ph = tk.Label(self.gui.canvas, image=self.default_card_imgtk, bg="white")
             ph.place(x=0, y=0)
             self.player_cards_labels.append(ph)
-        for i in range(7):
-            start_x = i * (column_width + constants.CARD_SPACING) + constants.CARD_SPACING
+
+        # Position each player in semicircular arc
+        for i in range(NUM_PLAYERS):
+            # Calculate angle for this player
+            if NUM_PLAYERS > 1:
+                t = i / (NUM_PLAYERS - 1)  # 0 to 1
+                # Start from 90° (left) to 90° (right), creating upward bowl from center below
+                angle_deg = 90 - ARC_SPAN_DEGREES/2 + t * ARC_SPAN_DEGREES
+            else:
+                angle_deg = 90  # Straight up
+
+            angle_rad = math.radians(angle_deg)
+
+            # Calculate base position (center of player's space)
+            # For a center below canvas, this creates an upward-opening bowl
+            base_x = CENTER_X + RADIUS * math.cos(angle_rad)
+            base_y = CENTER_Y - RADIUS * math.sin(angle_rad)
+
+            # Get player data
             player_data = next((data for data in player_data_list if data['player_index'] == i), None)
             cards = player_data['cards'] if player_data else ['-', '-']
-            card_display_y = start_y
+
+            # Position two cards for this player
             for j in range(2):
                 card = cards[j] if cards[j] != '-' else "default"
                 photo_img = self.get_cached_card_image(card)
                 idx = i * 2 + j
                 lbl = self.player_cards_labels[idx]
+
+                # Vertical offset for second card
+                card_offset_y = j * (constants.CARD_HEIGHT + 5)
+
+                # Center cards horizontally
+                card_x = base_x - constants.CARD_WIDTH / 2
+                card_y = base_y - constants.CARD_HEIGHT + card_offset_y
+
                 lbl.config(image=photo_img)
                 lbl.image = photo_img
-                lbl.place(x=start_x, y=card_display_y)
+                lbl.place(x=card_x, y=card_y)
                 lbl.bind("<Button-1>", lambda e, pi=i, ci=j: self.on_card_click(pi, ci))
-                card_display_y += constants.CARD_HEIGHT + 20
+
+            # Position decision labels below cards
             player_number = i + 1
-            if player_number in self.players_decision_labels and self.players_decision_labels[player_number]:
-                pass
-            else:
-                large_font = font.Font(family="Helvetica", size=14, weight="bold")
+            decision_y = base_y + constants.CARD_HEIGHT + 10
+
+            if player_number not in self.players_decision_labels or not self.players_decision_labels[player_number]:
+                large_font = font.Font(family="Helvetica", size=12, weight="bold")
                 l1 = tk.Label(self.gui.canvas, text="", fg="black", bg="white", font=large_font)
-                l1.place(x=start_x + column_width // 2, y=card_display_y + 5, anchor="n")
+                l1.place(x=base_x, y=decision_y, anchor="n")
                 l2 = tk.Label(self.gui.canvas, text="Optimal: ", fg="blue", bg="white", font=large_font)
-                l2.place(x=start_x + column_width // 2, y=card_display_y + 35, anchor="n")
+                l2.place(x=base_x, y=decision_y + 25, anchor="n")
                 self.players_decision_labels[player_number] = [l1, l2]
+            else:
+                # Update position of existing labels
+                self.players_decision_labels[player_number][0].place(x=base_x, y=decision_y, anchor="n")
+                self.players_decision_labels[player_number][1].place(x=base_x, y=decision_y + 25, anchor="n")
+
+            # Update decision text
             decision = self.blackjack_decision(cards, dealer_up_card, true_count, base_bet)[0] if player_data else ("-", "black")
             label1 = self.players_decision_labels[player_number][0]
             if label1.cget("text") != decision[0] or label1.cget("fg") != decision[1]:
                 label1.config(text=decision[0], fg=decision[1])
+
             label2 = self.players_decision_labels[player_number][1]
             cache_key = (tuple(cards), dealer_up_card)
             second_text = self.recommendation_cache.get(cache_key, ("Loading...", {}))[0]
             if label2.cget("text") != f"Optimal: {second_text}":
                 label2.config(text=f"Optimal: {second_text}")
-            self.create_label(f"Player {player_number}", start_x + column_width // 2, self.gui.winfo_height() - 20, anchor="s")
+
+            # Player number label at bottom (create once and reuse)
+            if player_number not in self.player_number_labels:
+                player_label = tk.Label(self.gui.canvas, text=f"Player {player_number}", bg="white")
+                self.player_number_labels[player_number] = player_label
+            else:
+                player_label = self.player_number_labels[player_number]
+
+            # Ensure text is set and position the label
+            player_label.config(text=f"Player {player_number}")
+            player_label.place(x=base_x, y=decision_y + 50, anchor="n")
 
     def create_colored_labels(self, prefix, text, color, x, y, anchor="n"):
         player_number = int(x // (constants.CARD_WIDTH + constants.CARD_SPACING))
@@ -443,33 +537,132 @@ class BlackjackLogic:
         self.open_card_selection_window("dealer", 0)
 
     def open_card_selection_window(self, player_index, card_index):
+        """Open card selection window with Excel-like table layout"""
         selection_window = tk.Toplevel(self.gui)
         selection_window.title("Select Card")
-        suits_order = ['Spades', 'Hearts', 'Diamonds', 'Clubs']
-        suit_cards = {suit: [] for suit in suits_order}
-        for card in self.card_utils.get_all_card_names():
-            try:
-                suit = card.split(" of ")[1]
-                if suit in suit_cards:
-                    suit_cards[suit].append(card)
-            except IndexError:
-                continue
-        for row_index, suit in enumerate(suits_order):
-            for col_index, card in enumerate(suit_cards[suit]):
-                imgtk = self.get_cached_card_image(card)
-                if imgtk:
-                    card_button = tk.Button(selection_window, image=imgtk, command=lambda c=card: self.replace_card(player_index, card_index, c))
-                    card_button.image = imgtk
-                    card_button.grid(row=row_index, column=col_index)
-        if self.default_card_imgtk:
-            default_button = tk.Button(selection_window, image=self.default_card_imgtk, command=lambda: self.replace_card(player_index, card_index, "-"))
-            default_button.image = self.default_card_imgtk
-            default_button.grid(row=len(suits_order), column=0)
+        selection_window.configure(bg='#f8f9fa')
 
-    def replace_card(self, player_index, card_index, card_name):
-        for widget in self.gui.winfo_children():
-            if isinstance(widget, tk.Toplevel):
-                widget.destroy()
+        # Make window modal
+        selection_window.grab_set()
+
+        # Set large fixed size to fit everything
+        window_width = 1100
+        window_height = 750
+
+        # Center on screen
+        x = (selection_window.winfo_screenwidth() // 2) - (window_width // 2)
+        y = (selection_window.winfo_screenheight() // 2) - (window_height // 2)
+        selection_window.geometry(f'{window_width}x{window_height}+{x}+{y}')
+        selection_window.resizable(False, False)
+
+        # Header
+        header_frame = tk.Frame(selection_window, bg='#ffffff', height=60)
+        header_frame.pack(fill=tk.X, side=tk.TOP)
+        header_frame.pack_propagate(False)
+
+        title = tk.Label(header_frame, text="Select a Card",
+                        font=('Inter', 16, 'bold'),
+                        bg='#ffffff', fg='#212529')
+        title.pack(pady=18)
+
+        # Main content frame
+        content_frame = tk.Frame(selection_window, bg='#f8f9fa')
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        # Excel-like table: All 52 cards displayed left to right in rows by suit
+        # 4 suits × 13 values = 52 cards total
+        suits_order = ['Spades', 'Hearts', 'Diamonds', 'Clubs']
+        values_order = ['Ace', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'Jack', 'Queen', 'King']
+
+        # Create table headers (values)
+        headers_frame = tk.Frame(content_frame, bg='#f8f9fa')
+        headers_frame.pack(fill=tk.X, pady=(0, 5))
+
+        # Empty space for suit column
+        tk.Label(headers_frame, text="Suit", font=('Inter', 11, 'bold'),
+                bg='#f8f9fa', fg='#212529', width=8, anchor='w').pack(side=tk.LEFT, padx=5)
+
+        # Value headers (displayed left to right)
+        for value in values_order:
+            tk.Label(headers_frame, text=value,
+                    font=('Inter', 10, 'bold'),
+                    bg='#f8f9fa', fg='#212529',
+                    width=6).pack(side=tk.LEFT, padx=1)
+
+        # Scrollable frame for cards
+        canvas = tk.Canvas(content_frame, bg='#f8f9fa', highlightthickness=0)
+        scrollbar = tk.Scrollbar(content_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg='#f8f9fa')
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Create rows for each suit
+        suit_symbols = {'Spades': '♠', 'Hearts': '♥', 'Diamonds': '♦', 'Clubs': '♣'}
+        for suit in suits_order:
+            row_frame = tk.Frame(scrollable_frame, bg='#ffffff',
+                               highlightbackground='#dee2e6', highlightthickness=1)
+            row_frame.pack(fill=tk.X, pady=2, padx=5)
+
+            # Suit label (like Excel row header)
+            suit_label = tk.Label(row_frame, text=f"{suit_symbols[suit]} {suit}",
+                                  font=('Inter', 11, 'bold'),
+                                  bg='#ffffff', fg='#212529',
+                                  width=8, anchor='w')
+            suit_label.pack(side=tk.LEFT, padx=5, pady=8)
+
+            # Card buttons for each value (left to right)
+            for value in values_order:
+                card_name = f"{value} of {suit}"
+                imgtk = self.get_cached_card_image(card_name, thumbnail=False)
+
+                if imgtk:
+                    card_button = tk.Button(row_frame, image=imgtk,
+                                          command=lambda c=card_name, w=selection_window: self.replace_card(player_index, card_index, c, w),
+                                          relief='flat',
+                                          bg='#ffffff',
+                                          activebackground='#e9ecef',
+                                          cursor='hand2',
+                                          borderwidth=1)
+                    card_button.image = imgtk
+                    card_button.pack(side=tk.LEFT, padx=2, pady=3)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Button frame at bottom
+        button_frame = tk.Frame(selection_window, bg='#ffffff', height=60)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        button_frame.pack_propagate(False)
+
+        cancel_btn = tk.Button(button_frame, text="Cancel",
+                               command=selection_window.destroy,
+                               bg='#6c757d', fg='white',
+                               font=('Inter', 11, 'normal'),
+                               relief='flat',
+                               cursor='hand2',
+                               padx=30, pady=10)
+        cancel_btn.pack(side=tk.LEFT, padx=20, pady=15)
+
+        if self.default_card_imgtk:
+            default_btn = tk.Button(button_frame, text="Reset to Default",
+                                   command=lambda: self.replace_card(player_index, card_index, "-", selection_window),
+                                   bg='#0d6efd', fg='white',
+                                   font=('Inter', 11, 'normal'),
+                                   relief='flat',
+                                   cursor='hand2',
+                                   padx=30, pady=10)
+            default_btn.pack(side=tk.RIGHT, padx=20, pady=15)
+
+    def replace_card(self, player_index, card_index, card_name, selection_window=None):
+        # Only destroy the specific card selection window, not all Toplevel windows
+        if selection_window and selection_window.winfo_exists():
+            selection_window.destroy()
 
         def do_replacement():
             if player_index == "dealer":
@@ -542,10 +735,27 @@ class BlackjackLogic:
 
     def create_dealer_card_placeholder(self):
         placeholder_img = self.get_card_image("default")
-        self.dealer_card_label = tk.Label(self.gui.canvas, image=placeholder_img, bg="white")
+        self.dealer_card_label = tk.Label(self.gui.canvas, image=placeholder_img,
+                                         bg="white", borderwidth=2, relief="raised")
         self.dealer_card_label.image = placeholder_img
-        self.dealer_card_label.place(relx=0.5, rely=0.07, anchor="center")
+        # Use absolute positioning for better control - updated after canvas is sized
+        self.gui.after(100, self.position_dealer_card)
         self.dealer_card_label.bind("<Button-1>", lambda e: self.on_dealer_card_click())
+
+    def position_dealer_card(self):
+        """Position dealer card at top center of canvas"""
+        try:
+            canvas_width = self.gui.canvas.winfo_width()
+            if canvas_width > 1:  # Canvas is properly sized
+                dealer_x = canvas_width // 2 - 50  # Center (card is 100px wide)
+                dealer_y = 120  # Below dealer label
+                self.dealer_card_label.place(x=dealer_x, y=dealer_y)
+            else:
+                # Canvas not sized yet, use relative positioning
+                self.dealer_card_label.place(relx=0.5, rely=0.15, anchor="center")
+        except Exception as e:
+            print(f"Error positioning dealer card: {e}")
+            self.dealer_card_label.place(relx=0.5, rely=0.15, anchor="center")
 
     def get_card_image(self, card):
         if card == "default":
@@ -585,6 +795,10 @@ class BlackjackLogic:
         self.round_count += 1
         print("Reset for new round.")
 
+        # Save recommendation cache periodically
+        if self.round_count % 5 == 0:  # Save every 5 rounds
+            self.save_recommendation_cache()
+
     def reset_gui_elements(self):
         empty_image = tk.PhotoImage()
         for label in self.player_cards_labels:
@@ -596,6 +810,7 @@ class BlackjackLogic:
         for player_index in self.players_decision_labels:
             for label in self.players_decision_labels[player_index]:
                 label.config(text="")
+        # Player number labels remain visible during reset
         self.gui.round_label.config(text=f"Round: {self.round_count}")
 
     def clear_player_cards(self):
@@ -609,14 +824,100 @@ class BlackjackLogic:
                 label.destroy()
             self.recommendations.clear()
 
-    def get_cached_card_image(self, card_name):
-        if card_name in self.card_image_cache:
-            return self.card_image_cache[card_name]
+    def get_cached_card_image(self, card_name, thumbnail=False):
+        cache = self.card_thumbnail_cache if thumbnail else self.card_image_cache
+        if card_name in cache:
+            return cache[card_name]
         try:
             card_image_path = self.utils.generate_card_image_path(card_name)
-            img = Image.open(card_image_path).resize((60, 90))
+            size = (60, 90) if thumbnail else (60, 90)  # Larger thumbnails for bigger window
+            img = Image.open(card_image_path).resize(size)
             imgtk = ImageTk.PhotoImage(img)
-            self.card_image_cache[card_name] = imgtk
+            cache[card_name] = imgtk
             return imgtk
         except Exception:
             return self.default_card_imgtk
+
+    def preload_card_images(self):
+        """Preload all card images in a background thread to improve performance"""
+        def _preload():
+            try:
+                all_cards = self.card_utils.get_all_card_names()
+                total = len(all_cards)
+                for idx, card_name in enumerate(all_cards):
+                    # Preload both full-size and thumbnail
+                    self.get_cached_card_image(card_name, thumbnail=False)
+                    self.get_cached_card_image(card_name, thumbnail=True)
+
+                    # Update status every 10 cards
+                    if (idx + 1) % 10 == 0 or (idx + 1) == total:
+                        progress = f"Loading card images: {idx + 1}/{total}"
+                        self.gui.after(0, lambda p=progress: self.gui.set_status(p))
+
+                self.gui.after(0, lambda: self.gui.set_status("Card images loaded successfully"))
+            except Exception as e:
+                print(f"Error preloading card images: {e}")
+                self.gui.after(0, lambda: self.gui.set_status(f"Error loading images: {e}"))
+
+        # Run in background thread
+        threading.Thread(target=_preload, daemon=True).start()
+
+    def load_recommendation_cache(self):
+        """Load recommendation cache from disk for faster lookups"""
+        cache_file = os.path.join(os.path.dirname(__file__), '..', '..', 'recommendation_cache.json')
+        try:
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r') as f:
+                    cached_data = json.load(f)
+                    # Convert string keys back to tuples
+                    for key_str, value in cached_data.items():
+                        try:
+                            key = eval(key_str)  # Convert string representation back to tuple
+                            self.recommendation_cache[key] = tuple(value)
+                        except:
+                            continue
+                print(f"Loaded {len(self.recommendation_cache)} cached recommendations")
+        except Exception as e:
+            print(f"Failed to load recommendation cache: {e}")
+
+    def save_recommendation_cache(self):
+        """Save recommendation cache to disk for future use"""
+        cache_file = os.path.join(os.path.dirname(__file__), '..', '..', 'recommendation_cache.json')
+        try:
+            # Convert tuple keys to strings for JSON serialization
+            cache_dict = {str(k): v for k, v in self.recommendation_cache.items()}
+            with open(cache_file, 'w') as f:
+                json.dump(cache_dict, f, indent=2)
+            print(f"Saved {len(cache_dict)} recommendations to cache")
+        except Exception as e:
+            print(f"Failed to save recommendation cache: {e}")
+
+    def log_performance_metrics(self):
+        """Track and log performance metrics for debugging"""
+        current_time = time.time()
+        cycle_time = current_time - self.last_cycle_time
+        self.last_cycle_time = current_time
+        self.cycle_times.append(cycle_time)
+        self.frame_count += 1
+
+        # Calculate FPS (frames per second)
+        if len(self.cycle_times) > 0:
+            avg_cycle_time = sum(self.cycle_times) / len(self.cycle_times)
+            fps = 1.0 / avg_cycle_time if avg_cycle_time > 0 else 0
+
+            # Log warning if cycle time is too slow
+            if cycle_time > 0.8:
+                print(f"⚠️  Slow cycle detected: {cycle_time:.2f}s (target: <0.8s)")
+
+            # Update FPS counter display every 5 frames
+            if self.frame_count % 5 == 0:
+                try:
+                    # Update status bar
+                    status_msg = f"FPS: {fps:.1f} | Avg Cycle: {avg_cycle_time*1000:.0f}ms | Frame: {self.frame_count}"
+                    self.gui.after(0, lambda msg=status_msg: self.gui.set_status(msg))
+
+                    # Update FPS display label
+                    cycle_ms = avg_cycle_time * 1000
+                    self.gui.after(0, lambda f=fps, c=cycle_ms: self.gui.update_fps_display(f, c))
+                except Exception as e:
+                    print(f"Error updating FPS display: {e}")

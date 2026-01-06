@@ -54,11 +54,11 @@ class CardUtils:
             display_base = label_key.split()[0]
             mapped_value = constants.VALUE_MAPPING.get(display_base, None)
             if mapped_value and str(mapped_value) == card_key:
-                if hasattr(label, 'winfo_toplevel'):
+                try:
                     top = label.winfo_toplevel()
                     top.after(0, lambda l=label, k=label_key, v=self.card_counters[card_key]: l.config(text=f"{k}: {v}x"))
-                else:
-                    label.config(text=f"{label_key}: {self.card_counters[card_key]}x")
+                except Exception as e:
+                    print(f"Failed to update label for {label_key}: {e}")
 
     def update_card_counter(self, card_name, increment):
         card_value_name = card_name.split(' ')[0]
@@ -75,6 +75,8 @@ class CardUtils:
             card_value_str = card_value_name
         self.card_counters[card_value_str] += increment
         print(f"Updated counter for {card_value_str}: {self.card_counters[card_value_str]}x")
+
+        # Update old-style labels (legacy GUI)
         for label_key, label in self.card_counter_labels.items():
             label_base = label_key.split(' ')[0]
             if (label_base == card_value_name or constants.VALUE_MAPPING.get(label_base) == card_value):
@@ -83,6 +85,20 @@ class CardUtils:
                     root.after(0, lambda l=label, k=label_key, v=self.card_counters[card_value_str]: l.config(text=f"{k}: {v}x"))
                 except Exception as e:
                     print(f"Failed to update label for {label_key}: {e}")
+
+        # Update modern GUI widgets
+        if self.gui and hasattr(self.gui, 'card_counter_widgets'):
+            # Direct update for the specific card value
+            count = self.card_counters[card_value_str]
+            for widget_key, widget_info in self.gui.card_counter_widgets.items():
+                # Match the widget key with the updated counter
+                if widget_key == card_value_name or widget_key == card_value_str:
+                    try:
+                        # Direct update without after() for immediate visibility
+                        widget_info['var'].set(f"{count}x")
+                        print(f"Updated modern widget for {widget_key}: {count}x")
+                    except Exception as e:
+                        print(f"Failed to update modern widget for {widget_key}: {e}")
 
     def calculate_true_count(self):
         decks_remaining = (constants.DECK_COUNT * 52 - len(self.counted_cards_this_round)) / 52
@@ -172,6 +188,26 @@ class CardUtils:
             self.gui.after(0, lambda: label.config(text=text))
         else:
             print("[Warning] GUI not attached. Label not updated.")
+
+    def refresh_card_counter_widgets(self):
+        """Refresh all card counter widgets to reflect current counts"""
+        if not self.gui or not hasattr(self.gui, 'card_counter_widgets'):
+            print("[Warning] GUI or card_counter_widgets not available")
+            return
+
+        for card_value, widget_info in self.gui.card_counter_widgets.items():
+            # Map display card value to internal counter key
+            if card_value == "Ace":
+                counter_key = "Ace"
+            elif card_value in ["Jack", "Queen", "King"]:
+                counter_key = "10"
+            else:
+                counter_key = card_value
+
+            count = self.card_counters.get(counter_key, 0)
+            widget_info['var'].set(f"{count}x")
+
+        print("[Card Counters] Refreshed all counter widgets")
 
 
 _card_utils_instance = None

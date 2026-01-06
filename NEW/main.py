@@ -10,34 +10,30 @@
 # TODO: Implement OCR for Saldo and Current bet
 
 import threading
+import sys
 
 import lib.common.constants as constants
-from lib.interfaces.gui import GraphicalUserInterface
+from lib.interfaces.modern_gui import ModernBlackjackGUI
 from lib.logic.background import BackgroundProcessor
+from lib.logic.log_manager import LogManager, PrintRedirector
 
 
-def init_gui():
-    gui = GraphicalUserInterface()
+def init_gui(log_manager):
+    """Initialize the modern GUI"""
+    gui = ModernBlackjackGUI(log_manager)
     return gui
 
 
-def start_background_processing(gui):
-    if not gui.background_processor:
-        gui.background_processor = BackgroundProcessor(gui.update_ui_callback, gui)
-        gui.background_processor.blackjack_logic.set_monitor(gui.monitor_utils.monitor)
-    gui.background_processor.start()
-
-
 def main():
+    # Initialize logging system BEFORE any print statements
+    log_manager = LogManager()
+    sys.stdout = PrintRedirector(log_manager, sys.stdout)
+
     print(f"Starting {constants.TITLE}")
-    gui = init_gui()
+    print("🎰 Loading modern interface...")
 
-    def start_when_ready():
-        gui.start()
-        detection_thread = threading.Thread(target=start_background_processing, args=(gui,), daemon=True)
-        detection_thread.start()
-
-    gui.start_button.config(command=lambda: [gui.confirm_monitor_selection(), start_when_ready()])
+    gui = init_gui(log_manager)
+    print("✓ Modern UI loaded successfully!")
 
     gui.mainloop()
 

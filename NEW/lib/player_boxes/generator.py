@@ -22,6 +22,10 @@ class PlayerBoxGenerator:
     def set_monitor(self, monitor):
         self.monitor_utils.set_monitor(monitor)
 
+    def generate(self):
+        """Generate player box regions (wrapper for generate_async)"""
+        self.generate_async()
+
     def generate_async(self):
         if self._thread_lock.locked():
             return

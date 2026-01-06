@@ -123,7 +123,8 @@ class GraphicalUserInterface(tk.Tk):
         self.card_counter_widgets = {}
         self.create_card_counter_widgets()
 
-        self.canvas = tk.Canvas(self, bg="#ffffff")
+        # Create canvas with minimum size for semicircular player layout
+        self.canvas = tk.Canvas(self, bg="#ffffff", width=900, height=650)
         self.canvas.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
         self.rowconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
@@ -135,6 +136,13 @@ class GraphicalUserInterface(tk.Tk):
         self.status_bar = ttk.Label(self, textvariable=self.status_var, style="Status.TLabel")
         self.status_bar.grid(row=2, column=0, columnspan=2, sticky="ew")
 
+        # Add FPS counter label in top-right corner of canvas
+        self.fps_var = tk.StringVar(value="FPS: --")
+        self.fps_label = tk.Label(self.canvas, textvariable=self.fps_var,
+                                   bg="yellow", fg="black", font=("Arial", 10, "bold"),
+                                   padx=5, pady=2)
+        self.fps_label.place(relx=0.98, rely=0.02, anchor="ne")
+
         ToolTip(self.start_button, "Start detection and analysis")
         ToolTip(self.reset_button, "Reset current round")
         ToolTip(self.refresh_button, "Refresh card counters")
@@ -143,38 +151,47 @@ class GraphicalUserInterface(tk.Tk):
         self.draw_canvas()
         self.populate_monitors()
 
+        # Pre-render player seats on initialization
+        self.initialize_player_seats()
+
         self.bind("<Configure>", self.on_resize)
 
     def set_status(self, message):
         self.status_var.set(message)
 
+    def update_fps_display(self, fps, cycle_time_ms):
+        """Update the FPS counter display"""
+        self.fps_var.set(f"FPS: {fps:.1f} | {cycle_time_ms:.0f}ms")
+
     def draw_canvas(self):
         import math
 
+        # Canvas cleared - placeholder rectangles removed for cleaner UI
+        # Player and dealer positions are now dynamically created by blackjack.py
         self.canvas.delete("all")
         self.update_idletasks()
-        width = self.canvas.winfo_width()
-        height = self.canvas.winfo_height()
 
-        dealer_x = width / 2
-        dealer_y = 80
-        self.canvas.create_rectangle(dealer_x - 75, dealer_y - 40, dealer_x + 75, dealer_y, fill="black", outline="white")
-        self.canvas.create_text(dealer_x, dealer_y - 20, text="Dealer", fill="white")
+    def initialize_player_seats(self):
+        """Pre-render empty player seats and dealer position on startup"""
+        from ..logic.background import BackgroundProcessor
 
-        radius = 300
-        start_angle = -60
-        angle_step = 120 / 6
+        # Create background processor to access blackjack logic
+        temp_processor = BackgroundProcessor(lambda: None, self)
 
-        for i in range(7):
-            angle = math.radians(start_angle + angle_step * i)
-            x_center = dealer_x + radius * math.cos(angle)
-            y_center = dealer_y + 150 + radius * math.sin(angle)
-            x1 = x_center - constants.CARD_WIDTH / 2
-            y1 = y_center - constants.CARD_HEIGHT / 2
-            x2 = x1 + constants.CARD_WIDTH
-            y2 = y1 + constants.CARD_HEIGHT
-            self.canvas.create_rectangle(x1, y1, x2, y2, outline="black")
-            self.canvas.create_text((x1 + x2) / 2, y2 + 20, text=f"Player {i + 1}", fill="black")
+        # Initialize empty player data
+        empty_player_data = [{'player_index': i, 'cards': ['-', '-']} for i in range(7)]
+
+        # Render the seats with empty cards
+        temp_processor.blackjack_logic.update_player_cards_display(
+            empty_player_data,
+            dealer_up_card=None,
+            true_count=0,
+            base_bet=constants.BASE_BET
+        )
+
+        # Store reference for later use
+        if not self.background_processor:
+            self.background_processor = temp_processor
 
     def populate_monitors(self):
         monitors = screeninfo.get_monitors()
@@ -315,17 +332,17 @@ class GraphicalUserInterface(tk.Tk):
             messagebox.showerror("Error", "Please confirm monitor selection before starting the game.")
             return
         self.clear_screen()
-        self.draw_canvas()
+
+        # Reuse existing background processor (created during init) or create new one
         if not self.background_processor:
             self.background_processor = BackgroundProcessor(self.update_ui_callback, self)
-            self.background_processor.blackjack_logic.set_monitor(self.monitor_utils.monitor)
+
+        # Set monitor for detection
+        self.background_processor.blackjack_logic.set_monitor(self.monitor_utils.monitor)
+
+        # Start background processing
         self.background_processor.start()
-
         self.set_status("Background processing started")
-
-        if not self.background_processor:
-            self.background_processor = BackgroundProcessor(self.update_ui_callback, self)
-            self.background_processor.blackjack_logic.set_monitor(self.monitor_utils.monitor)
 
     def reset_round(self):
         if self.background_processor and self.background_processor.blackjack_logic:

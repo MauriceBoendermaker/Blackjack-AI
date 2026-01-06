@@ -20,9 +20,18 @@ class BackgroundProcessor:
 
     def background_processing(self):
         while True:
-            self.blackjack_logic.capture_screen_and_track_cards()
+            detection_state = self.blackjack_logic.capture_screen_and_track_cards()
             self.update_queue.put("update")
-            time.sleep(constants.PRODUCER_SLEEP)
+
+            # Adaptive sleep timing based on detection activity
+            if detection_state == "active_dealing":
+                sleep_time = 0.5  # Fast checks during card dealing
+            elif detection_state == "round_complete":
+                sleep_time = 1.0  # Medium checks when round is complete
+            else:  # "waiting"
+                sleep_time = 1.5  # Slower checks when waiting for new round
+
+            time.sleep(sleep_time)
 
     def check_for_updates(self):
         while not self.update_queue.empty():
