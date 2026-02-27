@@ -13,7 +13,7 @@ numpy==1.26.4
 opencv-python==4.10.0.82
 opencv-python-headless==4.8.1.78
 packaging==24.0
-pillow==10.3.0
+pillow==12.1.1
 pyparsing==3.1.2
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
