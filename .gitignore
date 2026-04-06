@@ -9,3 +9,6 @@ __pycache__
 
 *.png
 *.jpg
+venv
+.claude/
+.idea/
