@@ -25,6 +25,8 @@ from ..common.card_mappings import PLAYER_CLASS_MAP, DEALER_CLASS_MAP, CUTTING_C
 from . import cards
 from . import deviations
 from . import ev_engine
+from . import shoe
+from . import sidebets
 from .counting import CardCounter
 from .models import ModelProvider, ModelError
 from .monitor_utils import ScreenCapture, scaled_player_regions, dealer_area_rect, scaling_factors
@@ -71,6 +73,8 @@ class DetectionEngine:
         self._last_activity = "waiting"
         self.last_error = None
         self._ev_error_logged = False
+        self._sidebet_sig = None
+        self._sidebet_cache = []
 
         self._snapshot_lock = threading.Lock()
         self._snapshot = None
@@ -461,6 +465,27 @@ class DetectionEngine:
         info["color"] = constants.ACTION_COLORS["H" if info["take"] else "R/H"]
         return info
 
+    def _side_bet_evs(self, count):
+        """Pre-deal side-bet EVs, recomputed only when the composition changes."""
+        sig = (count["cards_seen"],
+               tuple(sorted(count["per_rank"].items())),
+               tuple(sorted(count["suit_seen"].items())),
+               tuple(sorted(count["rank_seen_nosuit"].items())))
+        if sig == self._sidebet_sig:
+            return self._sidebet_cache
+        try:
+            comp52 = shoe.from_counter_snapshot(count, self.counter.deck_count)
+            comp10 = ev_engine.comp_from_per_rank(count["per_rank"], self.counter.deck_count)
+            result = sidebets.evaluate_all(comp52, comp10)
+        except Exception as e:
+            if not self._ev_error_logged:
+                self._ev_error_logged = True
+                self.log(f"Side-bet engine error: {type(e).__name__}: {e}")
+            result = []
+        self._sidebet_sig = sig
+        self._sidebet_cache = result
+        return result
+
     def publish_snapshot(self):
         with self._lock:
             dealer_rank = self.dealer_card
@@ -498,6 +523,7 @@ class DetectionEngine:
                 "seats": seats,
                 "dealer": {"card": dealer_rank, "locked": self.dealer_locked},
                 "insurance": insurance,
+                "side_bets": self._side_bet_evs(count),
                 "count": count,
                 "bet": StrategyAdvisor.bet_suggestion(count["true"]),
                 "round": self.round_number,

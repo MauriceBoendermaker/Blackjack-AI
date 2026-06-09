@@ -112,6 +112,41 @@ RULES = {
     "bj_pays": 1.5,           # 3:2; 6:5 tables use 1.2
 }
 
+# Side bets offered by the table and their paytables (X means pays X:1).
+# Defaults = Evolution live blackjack. House edges (8 decks, full shoe):
+# Perfect Pairs 4.10%, 21+3 3.70%, Hot 3 5.40%, Bust It 6.18% — all verified
+# against wizardofodds.com. Lucky Lucky / Lucky Ladies are off-Evolution bets,
+# disabled by default; enable per table.
+SIDE_BETS = {
+    "perfect_pairs": {
+        "label": "Perfect Pairs", "enabled": True,
+        "paytable": {"perfect": 25, "colored": 12, "mixed": 6},
+    },
+    "21+3": {
+        "label": "21+3", "enabled": True,
+        "paytable": {"suited_trips": 100, "straight_flush": 40, "trips": 30,
+                     "straight": 10, "flush": 5},
+    },
+    "hot3": {
+        "label": "Hot 3", "enabled": True,
+        "paytable": {"777": 100, "suited_21": 20, "21": 4, "20": 2, "19": 1},
+    },
+    "bust_it": {
+        "label": "Bust It", "enabled": True,
+        "paytable": {3: 1, 4: 2, 5: 9, 6: 50, 7: 100, 8: 250},  # 8 = 8+ cards
+    },
+    "lucky_lucky": {
+        "label": "Lucky Lucky", "enabled": False,
+        "paytable": {"suited_777": 200, "suited_678": 100, "777": 50, "678": 30,
+                     "suited_21": 15, "21": 3, "20": 2, "19": 2},
+    },
+    "lucky_ladies": {
+        "label": "Lucky Ladies", "enabled": False,
+        "paytable": {"qh_pair_dealer_bj": 1000, "qh_pair": 125, "matched_20": 19,
+                     "suited_20": 9, "any_20": 4},
+    },
+}
+
 CARD_RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "King", "Ace"]
 CARD_SUITS = ["Spades", "Hearts", "Diamonds", "Clubs"]
 

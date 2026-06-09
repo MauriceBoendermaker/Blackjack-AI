@@ -91,7 +91,18 @@ have it.
 
 **Effort:** ~1 day. Cheap, high trust-building value.
 
-## 3. Real-time side-bet EV panel
+## 3. ✅ DONE — Real-time side-bet EV panel
+
+> **Shipped 2026-06-09.** `lib/logic/sidebets.py`: exact pre-deal EV for
+> Perfect Pairs (2-card), 21+3 / Hot 3 / Lucky Lucky (shared 3-card
+> enumerator), Lucky Ladies (2-card × conditional dealer-BJ tier), and Bust It
+> (exact dealer bust-length recursion, rank-only). Full-shoe baselines
+> reproduce the published house edges — 21+3 −3.7039% and Bust It −6.1842%
+> match WoO to 6 decimals. Paytables/enable flags in `constants.SIDE_BETS`
+> (Evolution defaults on; Lucky Lucky/Ladies off). Left-panel "Side Bets"
+> section shows live EV%, green "● BET" when positive; recomputed only on
+> composition change (~107 ms worker-side, cached otherwise).
+> Tests: `tests/test_sidebets.py` (12 cases incl. composition-response).
 
 **What:** Per-round, at betting time, compute the exact EV of every side bet the table
 offers from the tracked composition; display EV% per bet, green when +EV, with a small

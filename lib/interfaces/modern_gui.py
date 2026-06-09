@@ -88,6 +88,7 @@ class ModernBlackjackGUI(tk.Tk):
         self._build_controls_section(inner)
         self._build_counters_section(inner)
         self._build_game_info_section(inner)
+        self._build_sidebets_section(inner)
 
     def _section(self, parent, title):
         frame = tk.Frame(parent, bg=C["bg_secondary"])
@@ -184,6 +185,24 @@ class ModernBlackjackGUI(tk.Tk):
                      bg=C["bg_secondary"], fg=C["text_primary"], wraplength=150,
                      justify="left").pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.info_vars[key] = var
+
+    def _build_sidebets_section(self, parent):
+        """Live pre-deal EV per enabled side bet; green when the bet is +EV."""
+        section = self._section(parent, "Side Bets (EV per unit)")
+        self.sidebet_rows = {}
+        for key, cfg in constants.SIDE_BETS.items():
+            if not cfg.get("enabled"):
+                continue
+            row = tk.Frame(section, bg=C["bg_secondary"])
+            row.pack(fill=tk.X, pady=2)
+            tk.Label(row, text=cfg.get("label", key), font=constants.FONT_BODY,
+                     width=14, anchor="w", bg=C["bg_secondary"],
+                     fg=C["text_secondary"]).pack(side=tk.LEFT)
+            var = tk.StringVar(value="—")
+            lbl = tk.Label(row, textvariable=var, font=constants.FONT_BODY_BOLD,
+                           anchor="w", bg=C["bg_secondary"], fg=C["text_primary"])
+            lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            self.sidebet_rows[key] = (var, lbl)
 
     # ------------------------------------------------------------ table/status
 
@@ -357,6 +376,19 @@ class ModernBlackjackGUI(tk.Tk):
         self.info_vars["decks"].set(f"{count['decks_remaining']:.1f}")
         self.info_vars["seen"].set(str(count["cards_seen"]))
         self.info_vars["bet"].set(snap["bet"])
+
+        for item in snap.get("side_bets", []):
+            row = self.sidebet_rows.get(item["key"])
+            if row is None:
+                continue
+            var, lbl = row
+            ev = item["ev"]
+            if ev is None:
+                var.set("—")
+                lbl.config(fg=C["text_secondary"])
+            else:
+                var.set(f"{ev * 100:+.2f}%" + ("  ● BET" if ev > 0 else ""))
+                lbl.config(fg=C["success"] if ev > 0 else C["text_secondary"])
 
         if snap["error"]:
             self.set_status(f"⚠ {snap['error']}", error=True)
