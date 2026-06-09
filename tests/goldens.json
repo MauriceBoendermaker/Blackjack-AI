@@ -1,0 +1,476 @@
+[
+ {
+  "case": "16vT_full_enhc",
+  "comp": [
+   32,
+   32,
+   32,
+   32,
+   32,
+   31,
+   32,
+   32,
+   32,
+   126
+  ],
+  "upcard": "T",
+  "hand": "T6",
+  "kw": {},
+  "response": {
+   "Error": false,
+   "HasInsurance": false,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": false,
+   "Insurance": 0.0,
+   "Surrender": 0.0,
+   "Stand": -0.5764043256109931,
+   "Hit": -0.5719283662146983,
+   "Double": -1.1438567324293967,
+   "Split": 0.0
+  }
+ },
+ {
+  "case": "16vT_full_peek",
+  "comp": [
+   32,
+   32,
+   32,
+   32,
+   32,
+   31,
+   32,
+   32,
+   32,
+   126
+  ],
+  "upcard": "T",
+  "hand": "T6",
+  "kw": {
+   "peek": 1
+  },
+  "response": {
+   "Error": false,
+   "HasInsurance": false,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": false,
+   "Insurance": 0.0,
+   "Surrender": 0.0,
+   "Stand": -0.540826736160998,
+   "Hit": -0.5359748431671139,
+   "Double": -1.071949686334228,
+   "Split": 0.0
+  }
+ },
+ {
+  "case": "16vT_full_h17",
+  "comp": [
+   32,
+   32,
+   32,
+   32,
+   32,
+   31,
+   32,
+   32,
+   32,
+   126
+  ],
+  "upcard": "T",
+  "hand": "T6",
+  "kw": {
+   "h17": 1
+  },
+  "response": {
+   "Error": false,
+   "HasInsurance": false,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": false,
+   "Insurance": 0.0,
+   "Surrender": 0.0,
+   "Stand": -0.5764043256109931,
+   "Hit": -0.5719283662146983,
+   "Double": -1.1438567324293967,
+   "Split": 0.0
+  }
+ },
+ {
+  "case": "A7v9_full_enhc",
+  "comp": [
+   31,
+   32,
+   32,
+   32,
+   32,
+   32,
+   31,
+   32,
+   31,
+   128
+  ],
+  "upcard": "9",
+  "hand": "A7",
+  "kw": {},
+  "response": {
+   "Error": false,
+   "HasInsurance": false,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": false,
+   "Insurance": 0.0,
+   "Surrender": 0.0,
+   "Stand": -0.18277744288039827,
+   "Hit": -0.09903880160974016,
+   "Double": -0.28619268090039585,
+   "Split": 0.0
+  }
+ },
+ {
+  "case": "11vA_full_enhc",
+  "comp": [
+   31,
+   32,
+   32,
+   32,
+   31,
+   31,
+   32,
+   32,
+   32,
+   128
+  ],
+  "upcard": "A",
+  "hand": "65",
+  "kw": {},
+  "response": {
+   "Error": false,
+   "HasInsurance": true,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": false,
+   "Insurance": -0.07021791767554475,
+   "Surrender": 0.0,
+   "Stand": -0.7675589756966035,
+   "Hit": -0.2088777668232878,
+   "Double": -0.5339379694205746,
+   "Split": 0.0
+  }
+ },
+ {
+  "case": "11vA_full_peek",
+  "comp": [
+   31,
+   32,
+   32,
+   32,
+   31,
+   31,
+   32,
+   32,
+   32,
+   128
+  ],
+  "upcard": "A",
+  "hand": "65",
+  "kw": {
+   "peek": 1
+  },
+  "response": {
+   "Error": false,
+   "HasInsurance": true,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": false,
+   "Insurance": -0.07021791767554475,
+   "Surrender": 0.0,
+   "Stand": -0.6631644103954288,
+   "Hit": 0.14643327123502514,
+   "Double": 0.12450392501509822,
+   "Split": 0.0
+  }
+ },
+ {
+  "case": "88vT_full_enhc",
+  "comp": [
+   32,
+   32,
+   32,
+   32,
+   32,
+   32,
+   32,
+   30,
+   32,
+   127
+  ],
+  "upcard": "T",
+  "hand": "88",
+  "kw": {},
+  "response": {
+   "Error": false,
+   "HasInsurance": false,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": true,
+   "Insurance": 0.0,
+   "Surrender": 0.0,
+   "Stand": -0.5735675807127409,
+   "Hit": -0.5723990091453984,
+   "Double": -1.1447980182907969,
+   "Split": -0.6107812365361918
+  }
+ },
+ {
+  "case": "TTvA_full_enhc",
+  "comp": [
+   31,
+   32,
+   32,
+   32,
+   32,
+   32,
+   32,
+   32,
+   32,
+   126
+  ],
+  "upcard": "A",
+  "hand": "TT",
+  "kw": {},
+  "response": {
+   "Error": false,
+   "HasInsurance": true,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": true,
+   "Insurance": -0.0847457627118644,
+   "Surrender": 0.0,
+   "Stand": 0.14994858225514718,
+   "Hit": -0.899834438203054,
+   "Double": -1.7996688764061082,
+   "Split": -0.5023143382051586
+  }
+ },
+ {
+  "case": "9v6_full_enhc",
+  "comp": [
+   32,
+   32,
+   32,
+   31,
+   31,
+   31,
+   32,
+   32,
+   32,
+   128
+  ],
+  "upcard": "6",
+  "hand": "54",
+  "kw": {},
+  "response": {
+   "Error": false,
+   "HasInsurance": false,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": false,
+   "Insurance": 0.0,
+   "Surrender": 0.0,
+   "Stand": -0.14886500031108452,
+   "Hit": 0.2038919227722692,
+   "Double": 0.3318230658520255,
+   "Split": 0.0
+  }
+ },
+ {
+  "case": "16vT_rich_enhc",
+  "comp": [
+   14,
+   8,
+   8,
+   8,
+   8,
+   7,
+   12,
+   12,
+   12,
+   78
+  ],
+  "upcard": "T",
+  "hand": "T6",
+  "kw": {},
+  "response": {
+   "Error": false,
+   "HasInsurance": false,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": false,
+   "Insurance": 0.0,
+   "Surrender": 0.0,
+   "Stand": -0.6750667716084691,
+   "Hit": -0.7519190481873161,
+   "Double": -1.5038380963746323,
+   "Split": 0.0
+  }
+ },
+ {
+  "case": "16vT_rich_peek",
+  "comp": [
+   14,
+   8,
+   8,
+   8,
+   8,
+   7,
+   12,
+   12,
+   12,
+   78
+  ],
+  "upcard": "T",
+  "hand": "T6",
+  "kw": {
+   "peek": 1
+  },
+  "response": {
+   "Error": false,
+   "HasInsurance": false,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": false,
+   "Insurance": 0.0,
+   "Surrender": 0.0,
+   "Stand": -0.6453343193373485,
+   "Hit": -0.7292188303743907,
+   "Double": -1.4584376607487815,
+   "Split": 0.0
+  }
+ },
+ {
+  "case": "12v4_poor_enhc",
+  "comp": [
+   10,
+   25,
+   26,
+   25,
+   24,
+   24,
+   12,
+   12,
+   12,
+   59
+  ],
+  "upcard": "4",
+  "hand": "T2",
+  "kw": {},
+  "response": {
+   "Error": false,
+   "HasInsurance": false,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": false,
+   "Insurance": 0.0,
+   "Surrender": 0.0,
+   "Stand": -0.3586993448454844,
+   "Hit": -0.26193689829541916,
+   "Double": -0.5935220249856166,
+   "Split": 0.0
+  }
+ },
+ {
+  "case": "9v6_full_h17",
+  "comp": [
+   32,
+   32,
+   32,
+   31,
+   31,
+   31,
+   32,
+   32,
+   32,
+   128
+  ],
+  "upcard": "6",
+  "hand": "54",
+  "kw": {
+   "h17": 1
+  },
+  "response": {
+   "Error": false,
+   "HasInsurance": false,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": false,
+   "Insurance": 0.0,
+   "Surrender": 0.0,
+   "Stand": -0.11577432908578006,
+   "Hit": 0.19506232172286653,
+   "Double": 0.3195275427148514,
+   "Split": 0.0
+  }
+ },
+ {
+  "case": "A7v2_full_h17",
+  "comp": [
+   31,
+   31,
+   32,
+   32,
+   32,
+   32,
+   31,
+   32,
+   32,
+   128
+  ],
+  "upcard": "2",
+  "hand": "A7",
+  "kw": {
+   "h17": 1
+  },
+  "response": {
+   "Error": false,
+   "HasInsurance": false,
+   "HasSurrender": false,
+   "HasStand": true,
+   "HasHit": true,
+   "HasDouble": true,
+   "HasSplit": false,
+   "Insurance": 0.0,
+   "Surrender": 0.0,
+   "Stand": 0.11239703634300469,
+   "Hit": 0.06029777814249754,
+   "Double": 0.11586645818389296,
+   "Split": 0.0
+  }
+ }
+]

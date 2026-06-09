@@ -97,6 +97,20 @@ SNAPSHOT_POLL_MS = 120
 BASE_BET = 10
 DECK_COUNT = 8
 
+# Table rules for the exact-EV engine. Defaults match standard Evolution live
+# blackjack (8 decks, S17, double any two, DAS, split once, no surrender).
+# VERIFY peek/dealer_bj_takes in the specific table's game help — Evolution
+# titles vary on no-hole-card handling, and it changes the EVs.
+RULES = {
+    "s17": True,              # dealer stands on all 17s
+    "peek": False,            # True = US hole-card peek; False = no hole card (ENHC)
+    "dealer_bj_takes": "all", # ENHC only: dealer BJ takes "all" bets or "obo"
+    "das": True,              # double after split allowed
+    "double_on": "any",       # "any" | "9-11" | "10-11"
+    "hit_split_aces": False,
+    "surrender": False,       # late surrender offered
+}
+
 CARD_RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "King", "Ace"]
 CARD_SUITS = ["Spades", "Hearts", "Diamonds", "Clubs"]
 

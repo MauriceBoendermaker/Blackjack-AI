@@ -23,10 +23,14 @@ import cv2
 from ..common import constants
 from ..common.card_mappings import PLAYER_CLASS_MAP, DEALER_CLASS_MAP, CUTTING_CARD_CLASS
 from . import cards
+from . import ev_engine
 from .counting import CardCounter
 from .models import ModelProvider, ModelError
 from .monitor_utils import ScreenCapture, scaled_player_regions, dealer_area_rect, scaling_factors
 from .strategy import StrategyAdvisor
+
+_ACTION_NAMES = {"S": "Stand", "H": "Hit", "D": "Double", "P": "Split", "R": "Surrender"}
+_ACTION_COLOR_KEYS = {"S": "S", "H": "H", "D": "D/H", "P": "P", "R": "R/H"}
 
 
 class Seat:
@@ -65,6 +69,7 @@ class DetectionEngine:
         self._empty_frames = 0     # consecutive inference frames with zero detections
         self._last_activity = "waiting"
         self.last_error = None
+        self._ev_error_logged = False
 
         self._snapshot_lock = threading.Lock()
         self._snapshot = None
@@ -389,13 +394,48 @@ class DetectionEngine:
 
     # ------------------------------------------------------------- snapshot
 
+    def _optimal_advice(self, names, dealer_rank, per_rank, csv_action):
+        """Exact composition-dependent advice for a seat ('' when no decision).
+
+        Returns (text, color). Flags '≠ book' when the exact-EV action differs
+        from the basic-strategy CSV. Never raises — the advice line must not
+        be able to break the detection loop."""
+        try:
+            result = ev_engine.advise(names, dealer_rank, per_rank)
+        except Exception as e:
+            if not self._ev_error_logged:
+                self._ev_error_logged = True
+                self.log(f"EV engine error: {type(e).__name__}: {e}")
+            return "", constants.ACTION_COLORS["-"]
+        if result is None:
+            return "", constants.ACTION_COLORS["-"]
+        best = result["best"]
+        text = f"Optimal: {_ACTION_NAMES[best]} ({result['evs'][best]:+.3f})"
+        if self._csv_primary(csv_action, result["evs"]) not in (None, best):
+            text += " ≠ book"
+        return text, constants.ACTION_COLORS[_ACTION_COLOR_KEYS[best]]
+
+    @staticmethod
+    def _csv_primary(action, available_evs):
+        """First letter of a CSV code ('D/H' -> 'D') that is actually available
+        under the table rules; None when the CSV has no usable advice."""
+        if not action:
+            return None
+        for part in action.split("/"):
+            if part in available_evs:
+                return part
+        return None
+
     def publish_snapshot(self):
         with self._lock:
             dealer_rank = self.dealer_card
+            count = self.counter.snapshot()
             seats = []
             for seat in self.seats:
                 names = [c["name"] for c in seat.cards]
                 action, text, color = self.strategy.advice(names, dealer_rank)
+                optimal, optimal_color = self._optimal_advice(
+                    names, dealer_rank, count["per_rank"], action)
                 seats.append({
                     "index": seat.index,
                     "cards": names,
@@ -403,8 +443,9 @@ class DetectionEngine:
                     "total": cards.describe_hand(names),
                     "advice": text,
                     "advice_color": color,
+                    "optimal": optimal,
+                    "optimal_color": optimal_color,
                 })
-            count = self.counter.snapshot()
             snapshot = {
                 "seq": 0,
                 "seats": seats,

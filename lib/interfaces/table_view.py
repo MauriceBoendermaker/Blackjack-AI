@@ -46,6 +46,8 @@ class TableView:
                                   bg=C["bg_canvas"], fg=C["text_on_felt"]),
                 "advice": tk.Label(self.canvas, text="", font=constants.FONT_BODY_BOLD,
                                    bg=C["bg_canvas"], fg=C["text_on_felt"]),
+                "optimal": tk.Label(self.canvas, text="", font=constants.FONT_SMALL,
+                                    bg=C["bg_canvas"], fg=C["text_on_felt"]),
                 "add": None,          # "+" button, created lazily
                 "pos": (0, 0),
             })
@@ -131,7 +133,8 @@ class TableView:
         base_y = top + card_h + (n_cards - 1) * 26 + 6
         seat["total"].place(x=x, y=base_y, anchor="n")
         seat["advice"].place(x=x, y=base_y + 22, anchor="n")
-        seat["name"].place(x=x, y=base_y + 46, anchor="n")
+        seat["optimal"].place(x=x, y=base_y + 44, anchor="n")
+        seat["name"].place(x=x, y=base_y + 64, anchor="n")
         if seat["add"] is not None:
             seat["add"].place(x=x + card_w / 2 + 14, y=top + card_h / 2, anchor="w")
 
@@ -187,6 +190,10 @@ class TableView:
         advice, color = snap["advice"], snap["advice_color"]
         if seat["advice"].cget("text") != advice or seat["advice"].cget("fg") != color:
             seat["advice"].config(text=advice, fg=color)
+        optimal = snap.get("optimal", "")
+        opt_color = snap.get("optimal_color", C["text_on_felt"])
+        if seat["optimal"].cget("text") != optimal or seat["optimal"].cget("fg") != opt_color:
+            seat["optimal"].config(text=optimal, fg=opt_color)
 
         want_add = 2 <= len(snap["cards"]) < constants.MAX_CARDS_PER_SEAT
         if want_add and seat["add"] is None:
@@ -216,7 +223,7 @@ class TableView:
         for seat in self.seats:
             for lbl in seat["cards"]:
                 lbl.place_forget()
-            for key in ("name", "total", "advice"):
+            for key in ("name", "total", "advice", "optimal"):
                 seat[key].place_forget()
             if seat["add"] is not None:
                 seat["add"].place_forget()

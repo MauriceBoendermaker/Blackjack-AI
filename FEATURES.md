@@ -22,7 +22,15 @@ test oracle.
 
 ---
 
-## 1. Exact composition-dependent EV engine — the "Optimal" second advice ⭐
+## 1. ✅ DONE — Exact composition-dependent EV engine — the "Optimal" second advice ⭐
+
+> **Shipped 2026-06-09.** `lib/logic/ev_engine.py`: exact dealer recursion with
+> no-blackjack conditioning (Bayes-corrected draw probabilities), memoized player
+> expectimax, split-once model, peek/ENHC + S17/H17 + DAS rule config in
+> `constants.RULES`. Per-seat "Optimal: <action> (EV)" line on the table with a
+> "≠ book" deviation flag. Validated against the WoO oracle to 1e-9 on all 14
+> golden cases (`tests/test_ev_engine.py`; splits within 0.01 — different split
+> model). Cold worst-case decision 0.44 s, cached thereafter.
 
 **What:** New `lib/logic/ev_engine.py` computing *exact* expected values for
 Stand / Hit / Double / Split / Surrender / Insurance from the actual remaining-shoe
