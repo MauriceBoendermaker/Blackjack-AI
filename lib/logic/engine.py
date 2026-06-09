@@ -426,16 +426,40 @@ class DetectionEngine:
                 return part
         return None
 
+    def _insurance_advice(self, dealer_rank, per_rank):
+        """Table-level insurance call when the dealer shows an ace, else None."""
+        if not dealer_rank or cards.dealer_strategy_rank(dealer_rank) != "A":
+            return None
+        try:
+            info = ev_engine.insurance_advice(per_rank)
+        except Exception as e:
+            if not self._ev_error_logged:
+                self._ev_error_logged = True
+                self.log(f"EV engine error: {type(e).__name__}: {e}")
+            return None
+        verb = "TAKE" if info["take"] else "Decline"
+        info["text"] = f"Insurance: {verb} ({info['ev']:+.3f}/unit)"
+        info["color"] = constants.ACTION_COLORS["H" if info["take"] else "R/H"]
+        return info
+
     def publish_snapshot(self):
         with self._lock:
             dealer_rank = self.dealer_card
             count = self.counter.snapshot()
+            insurance = self._insurance_advice(dealer_rank, count["per_rank"])
             seats = []
             for seat in self.seats:
                 names = [c["name"] for c in seat.cards]
                 action, text, color = self.strategy.advice(names, dealer_rank)
                 optimal, optimal_color = self._optimal_advice(
                     names, dealer_rank, count["per_rank"], action)
+                if (insurance is not None and not optimal and len(names) == 2
+                        and cards.hand_value(names) == 21):
+                    # Natural blackjack vs an ace: the even-money decision.
+                    take = insurance["even_money_edge"] > 0
+                    optimal = (f"Even money: {'TAKE' if take else 'Decline'} "
+                               f"({insurance['even_money_edge']:+.3f})")
+                    optimal_color = constants.ACTION_COLORS["H" if take else "R/H"]
                 seats.append({
                     "index": seat.index,
                     "cards": names,
@@ -450,6 +474,7 @@ class DetectionEngine:
                 "seq": 0,
                 "seats": seats,
                 "dealer": {"card": dealer_rank, "locked": self.dealer_locked},
+                "insurance": insurance,
                 "count": count,
                 "bet": StrategyAdvisor.bet_suggestion(count["true"]),
                 "round": self.round_number,

@@ -139,7 +139,14 @@ uniformly distributed (small, quantifiable error) until the model is extended.
 
 **Effort:** ~1–2 days. Do before or together with Feature 3.
 
-## 5. Insurance & even-money advisor
+## 5. ✅ DONE — Insurance & even-money advisor
+
+> **Shipped 2026-06-09.** `ev_engine.insurance_advice()`: take iff unseen tens
+> fraction > 1/3 (exact, verified against the WoO −35/413 oracle value); even
+> money generalized via `bj_pays` (6:5 flips at p > 1/6). Table view shows an
+> "Insurance: TAKE/Decline (EV/unit)" chip under the dealer ace, and seats
+> holding a natural get an "Even money: TAKE/Decline (edge)" line. Tests:
+> `tests/test_insurance.py` incl. headless engine-snapshot integration.
 
 **What:** When the dealer shows an Ace, a dedicated advice chip: **Take / Decline
 insurance** (and even-money on blackjack), computed exactly.

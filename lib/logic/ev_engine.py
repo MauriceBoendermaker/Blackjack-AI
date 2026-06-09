@@ -50,6 +50,7 @@ class Rules:
     double_on: str = "any"        # "any" | "9-11" | "10-11" (hard totals)
     hit_split_aces: bool = False
     surrender: bool = False       # late surrender offered
+    bj_pays: float = 1.5          # 3:2; 6:5 tables use 1.2
 
 
 DEFAULT_RULES = Rules(**constants.RULES)
@@ -289,6 +290,23 @@ def insurance_ev(comp: tuple) -> tuple:
         return 0.0, -1.0
     p = comp[TEN] / n
     return p, 3.0 * p - 1.0
+
+
+def insurance_advice(per_rank: dict, deck_count: int = constants.DECK_COUNT,
+                     rules: Rules = DEFAULT_RULES) -> dict:
+    """The exact insurance / even-money call from the live shoe composition.
+
+    Insurance is a solved decision: take iff the unseen tens fraction exceeds
+    1/3 (regardless of the player's hand). Even money on a blackjack is the
+    same bet in disguise — its edge over declining is 1 - bj_pays * (1 - p),
+    which for 3:2 tables goes positive at exactly the same p > 1/3."""
+    p, ev = insurance_ev(comp_from_per_rank(per_rank, deck_count))
+    return {
+        "take": ev > 0,
+        "p_ten": p,
+        "ev": ev,                                        # per unit of insurance bet
+        "even_money_edge": 1.0 - rules.bj_pays * (1.0 - p),
+    }
 
 
 @lru_cache(maxsize=20_000)

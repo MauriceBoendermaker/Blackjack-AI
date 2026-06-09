@@ -109,6 +109,7 @@ RULES = {
     "double_on": "any",       # "any" | "9-11" | "10-11"
     "hit_split_aces": False,
     "surrender": False,       # late surrender offered
+    "bj_pays": 1.5,           # 3:2; 6:5 tables use 1.2
 }
 
 CARD_RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "King", "Ace"]

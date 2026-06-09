@@ -33,6 +33,8 @@ class TableView:
                                      bg=C["bg_canvas"], fg=C["text_on_felt"])
         self.dealer_card_lbl = tk.Label(self.canvas, bg=C["bg_canvas"], bd=0, cursor="hand2")
         self.dealer_card_lbl.bind("<Button-1>", lambda e: self.on_dealer_click())
+        self.dealer_insurance = tk.Label(self.canvas, text="", font=constants.FONT_BODY_BOLD,
+                                         bg=C["bg_canvas"], fg=C["text_on_felt"])
         self._dealer_rendered = "__none__"
 
         self.seats = []
@@ -103,6 +105,8 @@ class TableView:
 
         self.dealer_title.place(x=w / 2, y=18, anchor="n")
         self.dealer_card_lbl.place(x=w / 2, y=46, anchor="n")
+        self.dealer_insurance.place(
+            x=w / 2, y=46 + constants.DEALER_CARD_RENDER_SIZE[1] + 8, anchor="n")
 
         cx = w / 2
         cy = h + h * 0.55
@@ -155,6 +159,13 @@ class TableView:
                 photo = self.card_image("back", constants.DEALER_CARD_RENDER_SIZE)
             self.dealer_card_lbl.config(image=photo)
             self.dealer_card_lbl.image = photo
+
+        ins = snapshot.get("insurance")
+        ins_text = ins["text"] if ins else ""
+        ins_color = ins["color"] if ins else C["text_on_felt"]
+        if (self.dealer_insurance.cget("text") != ins_text
+                or self.dealer_insurance.cget("fg") != ins_color):
+            self.dealer_insurance.config(text=ins_text, fg=ins_color)
 
         for seat_snap in snapshot["seats"]:
             self._update_seat(seat_snap)
@@ -229,6 +240,7 @@ class TableView:
                 seat["add"].place_forget()
         self.dealer_title.place_forget()
         self.dealer_card_lbl.place_forget()
+        self.dealer_insurance.place_forget()
         self._preview_item = self.canvas.create_image(w / 2, h / 2, image=self._preview_photo)
         self._preview_close_btn = tk.Button(
             self.canvas, text="Close preview", command=lambda: (self.clear_preview(), on_close()),
