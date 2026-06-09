@@ -22,6 +22,7 @@ import cv2
 
 from ..common import constants
 from ..common.card_mappings import PLAYER_CLASS_MAP, DEALER_CLASS_MAP, CUTTING_CARD_CLASS
+from . import betting
 from . import cards
 from . import deviations
 from . import ev_engine
@@ -784,7 +785,7 @@ class DetectionEngine:
                 "insurance": insurance,
                 "side_bets": self._side_bet_evs(ev_count),
                 "count": count,
-                "bet": StrategyAdvisor.bet_suggestion(count["true"]),
+                "bet": betting.suggest(count["true"])["text"],
                 "round": self.round_number,
                 "cutting_card_seen": self.cutting_card_seen,
                 "activity": self._last_activity,

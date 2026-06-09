@@ -194,6 +194,19 @@ class ModernBlackjackGUI(tk.Tk):
                      justify="left").pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.info_vars[key] = var
 
+        # Editable bankroll feeds the fractional-Kelly bet suggestion.
+        row = tk.Frame(section, bg=C["bg_secondary"])
+        row.pack(fill=tk.X, pady=2)
+        tk.Label(row, text="Bankroll (€)", font=constants.FONT_BODY, width=14,
+                 anchor="w", bg=C["bg_secondary"], fg=C["text_secondary"]
+                 ).pack(side=tk.LEFT)
+        self.bankroll_var = tk.StringVar(value=f"{constants.BETTING['bankroll']:g}")
+        entry = tk.Entry(row, textvariable=self.bankroll_var, width=10,
+                         font=constants.FONT_BODY_BOLD)
+        entry.pack(side=tk.LEFT)
+        entry.bind("<Return>", lambda e: self._set_bankroll())
+        entry.bind("<FocusOut>", lambda e: self._set_bankroll())
+
     def _build_sidebets_section(self, parent):
         """Live pre-deal EV per enabled side bet; green when the bet is +EV.
         Rows exist for every known bet and show/hide with the settings."""
@@ -427,6 +440,19 @@ class ModernBlackjackGUI(tk.Tk):
 
     def _on_split_click(self, seat_idx, currently_split):
         self.controller.engine.set_split(seat_idx, not currently_split)
+
+    def _set_bankroll(self):
+        from ..common import settings
+        try:
+            value = float(self.bankroll_var.get().replace(",", "."))
+        except ValueError:
+            self.bankroll_var.set(f"{constants.BETTING['bankroll']:g}")
+            return
+        if value > 0 and value != constants.BETTING["bankroll"]:
+            constants.BETTING["bankroll"] = value
+            settings.save()
+            self.controller.engine.publish_snapshot()
+            self.set_status(f"Bankroll set to €{value:g} — bet ramp updated.")
 
     def _calibrate_regions(self):
         if self.monitor is None:

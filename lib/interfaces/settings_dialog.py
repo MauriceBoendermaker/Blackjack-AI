@@ -46,6 +46,16 @@ class SettingsDialog(tk.Toplevel):
         row = self._spin(row, "deck_count", "Decks in shoe", 1, 8, constants.DECK_COUNT)
         row = self._spin(row, "base_bet", "Base bet (€)", 1, 10_000, int(constants.BASE_BET))
 
+        row = self._heading(row, "Bet sizing (fractional Kelly)")
+        row = self._field(row, "betting:kelly_fraction", "Kelly fraction", "choice",
+                          [("1/4 Kelly (safest)", 0.25), ("1/2 Kelly", 0.5),
+                           ("Full Kelly", 1.0)],
+                          constants.BETTING["kelly_fraction"])
+        row = self._spin(row, "betting:table_min", "Table minimum (€)", 1, 100_000,
+                         int(constants.BETTING["table_min"]))
+        row = self._spin(row, "betting:table_max", "Table maximum (€, 0 = none)", 0,
+                         1_000_000, int(constants.BETTING["table_max"]))
+
         row = self._heading(row, "Side bets offered")
         for key, cfg in constants.SIDE_BETS.items():
             var = tk.BooleanVar(value=bool(cfg.get("enabled")))
@@ -115,14 +125,16 @@ class SettingsDialog(tk.Toplevel):
     # -------------------------------------------------------------- save
 
     def _save(self):
-        data = {"rules": {}, "side_bets": {}}
+        data = {"rules": {}, "side_bets": {}, "betting": {}}
         for key, spec in self._vars.items():
             if key.startswith("sidebet:"):
                 data["side_bets"][key.split(":", 1)[1]] = {"enabled": bool(spec.get())}
                 continue
             kind, var, mapping = spec
             value = mapping[var.get()] if kind == "choice" else var.get()
-            if key in ("deck_count", "base_bet"):
+            if key.startswith("betting:"):
+                data["betting"][key.split(":", 1)[1]] = value
+            elif key in ("deck_count", "base_bet"):
                 data[key] = value
             else:
                 data["rules"][key] = value

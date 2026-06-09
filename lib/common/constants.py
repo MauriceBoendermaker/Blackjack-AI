@@ -112,6 +112,20 @@ RULES = {
     "bj_pays": 1.5,           # 3:2; 6:5 tables use 1.2
 }
 
+# Bet sizing (Feature 7): edge ~ base_edge + edge_per_tc * true_count; wager
+# = bankroll * kelly_fraction * edge / variance, clamped to the table limits.
+# All persisted with the table profile (settings.json); bankroll is editable
+# straight from the left panel.
+BETTING = {
+    "bankroll": 1000.0,
+    "kelly_fraction": 0.5,   # half-Kelly: near-optimal growth, far less ruin
+    "base_edge": -0.005,     # house edge off the top for the configured rules
+    "edge_per_tc": 0.005,    # standard Hi-Lo shoe-game slope
+    "variance": 1.33,        # per-hand variance in squared units
+    "table_min": 10,
+    "table_max": 5000,       # 0 = no max
+}
+
 # Side bets offered by the table and their paytables (X means pays X:1).
 # Defaults = Evolution live blackjack. House edges (8 decks, full shoe):
 # Perfect Pairs 4.10%, 21+3 3.70%, Hot 3 5.40%, Bust It 6.18% — all verified

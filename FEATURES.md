@@ -216,7 +216,15 @@ polygon; per-hand advice lines in `TableView`; card picker gains a hand selector
 
 **Effort:** ~2–3 days (detection-side grouping is the fiddly part).
 
-## 7. Risk-aware bet ramp — fractional Kelly + bankroll
+## 7. ✅ DONE — Risk-aware bet ramp — fractional Kelly + bankroll
+
+> **Shipped 2026-06-09.** `lib/logic/betting.py`: edge ≈ base_edge + 0.5%/TC,
+> wager = bankroll × Kelly-fraction × edge / variance, clamped to table
+> limits; negative counts say min-bet/sit-out, and a Bet Behind hint reuses
+> the same edge. Bankroll is editable straight from the left panel (persists
+> with the profile); Kelly fraction and table limits live in the Settings
+> dialog. Replaces the fixed 2×/1.5×/0.5× hints. OCR of balance/bet remains
+> future work (TASKS.md). Tests: `tests/test_betting.py`.
 
 **What:** Replace the hardcoded 2x/1.5x/0.5x hints (`StrategyAdvisor.bet_suggestion`)
 with a real bet ramp: estimated edge at the current true count × fractional Kelly

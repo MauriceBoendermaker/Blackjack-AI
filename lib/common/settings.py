@@ -21,6 +21,7 @@ def snapshot() -> dict:
         "rules": dict(constants.RULES),
         "deck_count": constants.DECK_COUNT,
         "base_bet": constants.BASE_BET,
+        "betting": dict(constants.BETTING),
         "side_bets": {key: {"enabled": bool(cfg.get("enabled"))}
                       for key, cfg in constants.SIDE_BETS.items()},
     }
@@ -36,6 +37,13 @@ def apply(data: dict):
         constants.DECK_COUNT = max(1, min(8, int(data["deck_count"])))
     if "base_bet" in data:
         constants.BASE_BET = max(1, float(data["base_bet"]))
+    betting = data.get("betting", {})
+    for key in constants.BETTING:
+        if key in betting:
+            try:
+                constants.BETTING[key] = float(betting[key])
+            except (TypeError, ValueError):
+                pass
     for key, cfg in data.get("side_bets", {}).items():
         if key in constants.SIDE_BETS and "enabled" in cfg:
             constants.SIDE_BETS[key]["enabled"] = bool(cfg["enabled"])
