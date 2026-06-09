@@ -75,6 +75,7 @@ class EngineSnapshotIntegration(unittest.TestCase):
         eng.replace_card(1, 0, "10 of Hearts")
         eng.replace_card(1, 1, "6 of Clubs")       # ordinary hand
         eng.replace_dealer("Ace")
+        self.assertTrue(eng.flush_advice(timeout=60))  # advice is async now
 
         snap = eng.get_snapshot()
         ins = snap["insurance"]
@@ -86,6 +87,7 @@ class EngineSnapshotIntegration(unittest.TestCase):
         self.assertTrue(snap["seats"][1]["optimal"].startswith("Optimal:"))
 
         eng.replace_dealer("9")  # no ace, no insurance
+        eng.flush_advice(timeout=60)
         self.assertIsNone(eng.get_snapshot()["insurance"])
         self.assertFalse(eng.get_snapshot()["seats"][0]["optimal"].startswith("Even money"))
 

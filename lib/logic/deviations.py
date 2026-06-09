@@ -75,7 +75,10 @@ def index_advice(hand_key, dealer_rank, true_count,
         s17 = constants.RULES["s17"]
     if surrender is None:
         surrender = constants.RULES["surrender"]
-    key = (str(hand_key).upper(), str(dealer_rank).upper())
+    hand_key = str(hand_key).upper()
+    if hand_key == "5,5":
+        hand_key = "10"  # never split 5s — the hard-10 double indices apply
+    key = (hand_key, str(dealer_rank).upper())
 
     if surrender and two_cards:
         fab = (FAB4_S17 if s17 else FAB4_H17).get(key)

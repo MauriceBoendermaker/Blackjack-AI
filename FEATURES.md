@@ -30,7 +30,10 @@ test oracle.
 > `constants.RULES`. Per-seat "Optimal: <action> (EV)" line on the table with a
 > "≠ book" deviation flag. Validated against the WoO oracle to 1e-9 on all 14
 > golden cases (`tests/test_ev_engine.py`; splits within 0.01 — different split
-> model). Cold worst-case decision 0.44 s, cached thereafter.
+> model). Advice computes on a dedicated thread (never under the engine lock or
+> on the Tk thread): snapshots show "Optimal: …" for ~0.1–2 s on new
+> compositions, then refresh. Dealer playout cards are detected and counted
+> after the up-card locks, so the composition no longer drifts each round.
 
 **What:** New `lib/logic/ev_engine.py` computing *exact* expected values for
 Stand / Hit / Double / Split / Surrender / Insurance from the actual remaining-shoe

@@ -112,7 +112,15 @@ def hand_state(indices) -> tuple:
 
 # ------------------------------------------------------------ dealer hand
 
-@lru_cache(maxsize=300_000)
+# Manual memo instead of lru_cache: deep ace-up evaluations can touch a few
+# hundred thousand dealer states, and LRU eviction at that size THRASHES
+# (entries still needed by sibling subtrees get evicted and recomputed).
+# A plain dict never evicts mid-recursion; evaluate() clears it wholesale at
+# a top-level boundary when it outgrows the limit.
+_DEALER_CACHE = {}
+_DEALER_CACHE_LIMIT = 600_000
+
+
 def _dealer_final(comp: tuple, total: int, soft: bool, s17: bool) -> tuple:
     """P(final total = 17/18/19/20/21/bust) for a dealer who keeps drawing."""
     if total > 21:
@@ -121,6 +129,10 @@ def _dealer_final(comp: tuple, total: int, soft: bool, s17: bool) -> tuple:
         out = [0.0] * 6
         out[total - 17] = 1.0
         return tuple(out)
+    key = (comp, total, soft, s17)
+    cached = _DEALER_CACHE.get(key)
+    if cached is not None:
+        return cached
     n = sum(comp)
     if n == 0:  # degenerate; unreachable in practice
         return (0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
@@ -134,10 +146,12 @@ def _dealer_final(comp: tuple, total: int, soft: bool, s17: bool) -> tuple:
         p = c / n
         for i in range(6):
             acc[i] += p * sub[i]
-    return tuple(acc)
+    result = tuple(acc)
+    _DEALER_CACHE[key] = result
+    return result
 
 
-@lru_cache(maxsize=100_000)
+@lru_cache(maxsize=50_000)
 def _dealer_dist(comp: tuple, up_idx: int, excl_idx, s17: bool) -> tuple:
     """Dealer final-total distribution from the up-card, drawing the hole card
     (and all further cards) from `comp`. `excl_idx` excludes one rank as the
@@ -183,7 +197,10 @@ class _Evaluator:
     def draw_probs(self, comp: tuple):
         n = sum(comp)
         excl = self.excl
-        if excl is None or comp[excl] == 0:
+        if excl is None or comp[excl] == 0 or comp[excl] >= n:
+            # No conditioning possible/needed. comp[excl] >= n means only
+            # BJ-completing cards remain — P(no BJ) = 0, so the conditional
+            # branch carries zero weight; plain probabilities avoid a /0.
             return [(i, comp[i] / n) for i in range(10) if comp[i]]
         h = comp[excl]
         out = []
@@ -318,6 +335,8 @@ def evaluate(hand: tuple, up_idx: int, comp: tuple, rules: Rules = DEFAULT_RULES
     S/H/D/P/R; D, P, R appear only when the action is available. EVs are in
     units of the initial bet and — for ENHC rules — include the
     dealer-blackjack branch."""
+    if len(_DEALER_CACHE) > _DEALER_CACHE_LIMIT:
+        _DEALER_CACHE.clear()  # boundary clear: never evicts mid-recursion
     ev = _Evaluator(up_idx, rules)
     total, soft = hand_state(hand)
     two_cards = len(hand) == 2

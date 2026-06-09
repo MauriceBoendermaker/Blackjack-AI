@@ -27,7 +27,7 @@ from . import deviations
 from . import ev_engine
 from . import shoe
 from . import sidebets
-from .counting import CardCounter
+from .counting import CardCounter, counter_key
 from .models import ModelProvider, ModelError
 from .monitor_utils import ScreenCapture, scaled_player_regions, dealer_area_rect, scaling_factors
 from .strategy import StrategyAdvisor
@@ -58,6 +58,9 @@ class DetectionEngine:
         self.dealer_locked = False
         self._dealer_counted = False
         self._dealer_history = deque(maxlen=4)
+        self._dealer_pos = None          # up-card (cx, cy) in dealer-crop coords
+        self.dealer_extras = []          # playout cards: dicts rank, cx, cy
+        self._pending_dealer = {}        # (rank, qx, qy) -> consecutive sightings
         self.round_number = 1
         self.cutting_card_seen = False
 
@@ -73,8 +76,18 @@ class DetectionEngine:
         self._last_activity = "waiting"
         self.last_error = None
         self._ev_error_logged = False
-        self._sidebet_sig = None
-        self._sidebet_cache = []
+
+        # Advice (exact EV + side bets) is computed on a dedicated single
+        # worker thread, never under self._lock and never on the Tk thread:
+        # publish_snapshot only does cache lookups and submits jobs; finished
+        # jobs publish a fresh snapshot themselves.
+        self._advice_pool = ThreadPoolExecutor(max_workers=1,
+                                               thread_name_prefix="advice")
+        self._advice_lock = threading.Lock()
+        self._advice_cache = {}     # advice key -> ev_engine result (or None)
+        self._advice_pending = set()
+        self._sidebet_result = ([], None)   # (evs, composition signature)
+        self._sidebet_pending = False
 
         self._snapshot_lock = threading.Lock()
         self._snapshot = None
@@ -150,31 +163,29 @@ class DetectionEngine:
             self.provider.players_model().predict, frame,
             constants.PREDICTION_CONFIDENCE_PLAYERS, constants.PREDICTION_OVERLAP_PLAYERS)
 
-        dealer_preds = []
-        run_dealer = not self.dealer_locked
-        if run_dealer:
-            left, top, right, bottom = self._dealer_rect
-            crop = frame[top:bottom, left:right]
-            dealer_future = self._pool.submit(
-                self.provider.dealer_model().predict, crop,
-                constants.PREDICTION_CONFIDENCE_DEALER, constants.PREDICTION_OVERLAP_DEALER)
+        # The dealer area is watched for the whole round: before the lock to
+        # find the up-card, after it to count the dealer's playout cards —
+        # otherwise the shoe composition silently drifts every round.
+        left, top, right, bottom = self._dealer_rect
+        crop = frame[top:bottom, left:right]
+        dealer_future = self._pool.submit(
+            self.provider.dealer_model().predict, crop,
+            constants.PREDICTION_CONFIDENCE_DEALER, constants.PREDICTION_OVERLAP_DEALER)
 
         player_preds = players_future.result()
-        if run_dealer:
-            dealer_preds = dealer_future.result()
+        dealer_preds = dealer_future.result()
         self._metrics["inference_ms"] = (time.perf_counter() - t0) * 1000.0
         self.last_error = None
 
         with self._lock:
-            if run_dealer:
-                self._process_dealer(dealer_preds)
+            self._process_dealer(dealer_preds)
             self._process_players(player_preds)
             self._maybe_auto_new_round(player_preds)
 
     # --------------------------------------------------------------- dealer
 
     def _process_dealer(self, predictions):
-        best = None
+        cards_seen = []
         for p in predictions:
             if p["class"] == CUTTING_CARD_CLASS:
                 if not self.cutting_card_seen:
@@ -182,19 +193,70 @@ class DetectionEngine:
                     self.log("Cutting card seen — the shoe will be reshuffled soon.")
                 continue
             rank = DEALER_CLASS_MAP.get(p["class"])
-            if rank is None:
-                continue
-            if best is None or p["confidence"] > best[1]:
-                best = (rank, p["confidence"])
+            if rank is not None:
+                cards_seen.append(p | {"rank": rank})
+
+        if self.dealer_locked:
+            self._track_dealer_playout(cards_seen)
+            return
+
+        best = max(cards_seen, key=lambda p: p["confidence"], default=None)
         if best is None:
             # A frame with no dealer card breaks the consecutive-agreement run;
             # without this, an old transient misread could pair with a later one.
             self._dealer_history.clear()
             return
-        self._dealer_history.append(best[0])
+        self._dealer_history.append(best["rank"])
         recent = list(self._dealer_history)[-constants.DEALER_CONFIRM_FRAMES:]
         if len(recent) == constants.DEALER_CONFIRM_FRAMES and len(set(recent)) == 1:
+            self._dealer_pos = (best["cx"], best["cy"])
             self._set_dealer(recent[0], manual=False)
+
+    def _track_dealer_playout(self, cards_seen):
+        """Count the dealer's hole/hit cards after the up-card locks. Same
+        machinery as player hits: position dedupe + multi-cycle confirmation."""
+        limit_same = constants.SAME_CARD_DISTANCE_PX * self._dist_scale
+        seen_pending = set()
+        for p in cards_seen:
+            if self._matches_dealer_card(p, limit_same):
+                continue
+            key = (p["rank"], round(p["cx"] / 50.0), round(p["cy"] / 50.0))
+            seen_pending.add(key)
+            count = self._pending_dealer.get(key, 0) + 1
+            if count >= constants.EXTRA_CARD_CONFIRM_CYCLES:
+                self.dealer_extras.append({"rank": p["rank"], "cx": p["cx"], "cy": p["cy"]})
+                self.counter.count_card(p["rank"])
+                self._pending_dealer.pop(key, None)
+                self.log(f"Dealer draws: {p['rank']}")
+            else:
+                self._pending_dealer[key] = count
+        for key in [k for k in self._pending_dealer if k not in seen_pending]:
+            del self._pending_dealer[key]
+
+    def _matches_dealer_card(self, pred, limit_same):
+        """Is this detection the up-card or an already-counted playout card?"""
+        limit_flicker = limit_same * 0.4
+        if pred["rank"] == self.dealer_card:
+            if self._dealer_pos is None:
+                self._dealer_pos = (pred["cx"], pred["cy"])  # adopt (manual lock)
+                return True
+            dx = pred["cx"] - self._dealer_pos[0]
+            dy = pred["cy"] - self._dealer_pos[1]
+            if dx * dx + dy * dy < limit_same * limit_same:
+                return True
+        if self._dealer_pos is not None:
+            dx = pred["cx"] - self._dealer_pos[0]
+            dy = pred["cy"] - self._dealer_pos[1]
+            if dx * dx + dy * dy < limit_flicker * limit_flicker:
+                return True  # same spot, different class = misread flicker
+        for c in self.dealer_extras:
+            dx, dy = c["cx"] - pred["cx"], c["cy"] - pred["cy"]
+            dist_sq = dx * dx + dy * dy
+            if pred["rank"] == c["rank"] and dist_sq < limit_same * limit_same:
+                return True
+            if dist_sq < limit_flicker * limit_flicker:
+                return True
+        return False
 
     def _set_dealer(self, rank, manual):
         if self._dealer_counted and self.dealer_card is not None:
@@ -320,9 +382,13 @@ class DetectionEngine:
             seat.cards.clear()
         self._pending_extra.clear()
         self._dealer_history.clear()
+        self._pending_dealer.clear()
+        self.dealer_extras = []   # counted cards stay counted; list just resets
+        self._dealer_pos = None
         self.dealer_card = None
         self.dealer_locked = False
         self._dealer_counted = False
+        self._ev_error_logged = False
         self.round_number += 1
         if self.cutting_card_seen:
             self.log("Reminder: cutting card was seen — reset the shoe count after the shuffle.")
@@ -402,16 +468,25 @@ class DetectionEngine:
     def _optimal_advice(self, names, dealer_rank, per_rank, csv_action):
         """Exact composition-dependent advice for a seat ('' when no decision).
 
-        Returns (text, color). Flags '≠ book' when the exact-EV action differs
-        from the basic-strategy CSV. Never raises — the advice line must not
-        be able to break the detection loop."""
-        try:
-            result = ev_engine.advise(names, dealer_rank, per_rank)
-        except Exception as e:
-            if not self._ev_error_logged:
-                self._ev_error_logged = True
-                self.log(f"EV engine error: {type(e).__name__}: {e}")
+        Non-blocking: returns the cached EV result when this exact
+        (hand, dealer, composition, rules) was already computed; otherwise
+        submits a job to the advice thread and returns a placeholder — the
+        finished job publishes a fresh snapshot with the real line. Heavy EV
+        recursion therefore never runs under self._lock or on the Tk thread."""
+        hand = [c for c in names if c and c != "-"]
+        if len(hand) < 2 or not dealer_rank or cards.hand_value(hand) >= 21:
             return "", constants.ACTION_COLORS["-"]
+        key = (tuple(sorted(hand)), dealer_rank,
+               tuple(sorted(per_rank.items())), self.counter.deck_count,
+               tuple(sorted(constants.RULES.items())))
+        with self._advice_lock:
+            if key not in self._advice_cache:
+                if key not in self._advice_pending:
+                    self._advice_pending.add(key)
+                    self._advice_pool.submit(self._advice_job, key, list(hand),
+                                             dealer_rank, dict(per_rank))
+                return "Optimal: …", constants.ACTION_COLORS["-"]
+            result = self._advice_cache[key]
         if result is None:
             return "", constants.ACTION_COLORS["-"]
         best = result["best"]
@@ -419,6 +494,34 @@ class DetectionEngine:
         if self._csv_primary(csv_action, result["evs"]) not in (None, best):
             text += " ≠ book"
         return text, constants.ACTION_COLORS[_ACTION_COLOR_KEYS[best]]
+
+    def _advice_job(self, key, hand, dealer_rank, per_rank):
+        try:
+            result = ev_engine.advise(hand, dealer_rank, per_rank,
+                                      self.counter.deck_count)
+        except Exception as e:
+            result = None
+            if not self._ev_error_logged:
+                self._ev_error_logged = True
+                self.log(f"EV engine error: {type(e).__name__}: {e}")
+        with self._advice_lock:
+            if len(self._advice_cache) > 1024:
+                self._advice_cache.clear()
+            self._advice_cache[key] = result
+            self._advice_pending.discard(key)
+        self.publish_snapshot()
+
+    def flush_advice(self, timeout=15.0) -> bool:
+        """Block until all queued advice/side-bet jobs have landed and the
+        snapshot reflects them. For tests and debugging only."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            barrier = self._advice_pool.submit(lambda: None)
+            barrier.result(max(0.1, deadline - time.monotonic()))
+            with self._advice_lock:
+                if not self._advice_pending and not self._sidebet_pending:
+                    return True
+        return False
 
     @staticmethod
     def _csv_primary(action, available_evs):
@@ -466,37 +569,73 @@ class DetectionEngine:
         return info
 
     def _side_bet_evs(self, count):
-        """Pre-deal side-bet EVs, recomputed only when the composition changes."""
+        """Pre-deal side-bet EVs. Non-blocking: returns the latest computed
+        values (possibly one composition behind) and lets the advice thread
+        catch up; the finished job publishes a fresh snapshot."""
         sig = (count["cards_seen"],
                tuple(sorted(count["per_rank"].items())),
                tuple(sorted(count["suit_seen"].items())),
-               tuple(sorted(count["rank_seen_nosuit"].items())))
-        if sig == self._sidebet_sig:
-            return self._sidebet_cache
+               tuple(sorted(count["rank_seen_nosuit"].items())),
+               self.counter.deck_count, constants.RULES["s17"],
+               tuple(k for k, v in constants.SIDE_BETS.items() if v.get("enabled")))
+        with self._advice_lock:
+            result, cached_sig = self._sidebet_result
+            if cached_sig != sig and not self._sidebet_pending:
+                self._sidebet_pending = True
+                self._advice_pool.submit(self._sidebet_job, sig, {
+                    "per_rank": dict(count["per_rank"]),
+                    "suit_seen": dict(count["suit_seen"]),
+                    "rank_seen_nosuit": dict(count["rank_seen_nosuit"]),
+                })
+            return result
+
+    def _sidebet_job(self, sig, count):
         try:
             comp52 = shoe.from_counter_snapshot(count, self.counter.deck_count)
-            comp10 = ev_engine.comp_from_per_rank(count["per_rank"], self.counter.deck_count)
+            comp10 = ev_engine.comp_from_per_rank(count["per_rank"],
+                                                  self.counter.deck_count)
             result = sidebets.evaluate_all(comp52, comp10)
         except Exception as e:
+            result = []
             if not self._ev_error_logged:
                 self._ev_error_logged = True
                 self.log(f"Side-bet engine error: {type(e).__name__}: {e}")
-            result = []
-        self._sidebet_sig = sig
-        self._sidebet_cache = result
-        return result
+        with self._advice_lock:
+            self._sidebet_result = (result, sig)
+            self._sidebet_pending = False
+        self.publish_snapshot()
+
+    def _ev_count(self, count):
+        """The composition the EV engines must see. After a mid-round shoe
+        reset, cards still on the table are detached from the counter
+        (counted=False) but they ARE seen — fold them back in for EV inputs
+        (the displayed counters stay as the user set them)."""
+        extra = {}
+        for seat in self.seats:
+            for c in seat.cards:
+                if not c["counted"]:
+                    key = counter_key(c["name"])
+                    extra[key] = extra.get(key, 0) + 1
+        if not extra:
+            return count
+        per_rank = dict(count["per_rank"])
+        for key, n in extra.items():
+            per_rank[key] = per_rank.get(key, 0) + n
+        return {**count, "per_rank": per_rank,
+                "cards_seen": count["cards_seen"] + sum(extra.values())}
 
     def publish_snapshot(self):
         with self._lock:
             dealer_rank = self.dealer_card
             count = self.counter.snapshot()
-            insurance = self._insurance_advice(dealer_rank, count["per_rank"])
+            ev_count = self._ev_count(count)
+            insurance = self._insurance_advice(dealer_rank, ev_count["per_rank"])
             seats = []
             for seat in self.seats:
                 names = [c["name"] for c in seat.cards]
                 action, text, color = self.strategy.advice(names, dealer_rank)
                 optimal, optimal_color = self._optimal_advice(
-                    names, dealer_rank, count["per_rank"], action)
+                    names, dealer_rank, ev_count["per_rank"], action)
                 if (insurance is not None and not optimal and len(names) == 2
                         and cards.hand_value(names) == 21):
                     # Natural blackjack vs an ace: the even-money decision.
@@ -521,9 +660,10 @@ class DetectionEngine:
             snapshot = {
                 "seq": 0,
                 "seats": seats,
-                "dealer": {"card": dealer_rank, "locked": self.dealer_locked},
+                "dealer": {"card": dealer_rank, "locked": self.dealer_locked,
+                           "extras": [c["rank"] for c in self.dealer_extras]},
                 "insurance": insurance,
-                "side_bets": self._side_bet_evs(count),
+                "side_bets": self._side_bet_evs(ev_count),
                 "count": count,
                 "bet": StrategyAdvisor.bet_suggestion(count["true"]),
                 "round": self.round_number,

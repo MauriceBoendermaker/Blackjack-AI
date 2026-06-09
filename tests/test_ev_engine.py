@@ -114,13 +114,25 @@ class EngineBasics(unittest.TestCase):
         self.assertIsNone(ev_engine.advise(["9 of Hearts"], "5", per_rank))
 
     def test_performance(self):
-        """A cold decision must be far under the detection cycle budget."""
-        comp = ev_engine._minus(ev_engine._minus(ev_engine._minus(full_shoe(8), 1), 5), TEN)
-        evaluate.cache_clear()
-        t0 = time.perf_counter()
-        evaluate((1, 5), TEN, comp, Rules())  # 2,6 vs T — deep hit tree
-        elapsed = time.perf_counter() - t0
-        self.assertLess(elapsed, 0.5, f"cold evaluate took {elapsed:.3f}s")
+        """Cold decisions (all caches empty) within the async-advice budget.
+        Ace up-cards are the deep case — they run on the advice thread, so
+        seconds are tolerable, but they must stay bounded."""
+        def cold(hand, up, budget):
+            evaluate.cache_clear()
+            ev_engine._dealer_dist.cache_clear()
+            ev_engine._DEALER_CACHE.clear()
+            comp = full_shoe(8)
+            for idx in hand + (up,):
+                comp = ev_engine._minus(comp, idx)
+            t0 = time.perf_counter()
+            evaluate(hand, up, comp, Rules())
+            elapsed = time.perf_counter() - t0
+            self.assertLess(elapsed, budget,
+                            f"cold {hand} vs {up} took {elapsed:.3f}s")
+
+        cold((1, 5), TEN, 1.5)   # 2,6 vs T — deep hit tree, common case
+        cold((2, TEN), ACE, 8.0) # 13 vs A — the conditioned deep case
+        ev_engine._DEALER_CACHE.clear()  # don't leave 100s of MB behind
 
 
 if __name__ == "__main__":
