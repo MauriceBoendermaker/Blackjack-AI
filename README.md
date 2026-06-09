@@ -72,7 +72,12 @@ dealer models in parallel, updates the game state, and publishes an
 immutable snapshot. The GUI polls that snapshot from the Tk event loop and
 only updates widgets whose content actually changed.
 
-The dealer call stops for the rest of the round once the up-card is
-confirmed, and hosted-API uploads are downscaled to 1280px — together with
-the frame-skip this keeps API traffic to a small fraction of the old
-implementation.
+The dealer area is watched for the whole round: the up-card locks by
+multi-frame consensus, after which the dealer's playout cards are tracked and
+counted into the shoe (composition accuracy beats the old stop-after-lock
+optimization). Hosted-API uploads are downscaled to 1280px and statically
+unchanged frames are skipped before any inference happens.
+
+Exact-EV advice, side-bet EVs, and session persistence run on a dedicated
+advice thread — snapshot publishing stays at sub-millisecond cost and the Tk
+thread never computes.

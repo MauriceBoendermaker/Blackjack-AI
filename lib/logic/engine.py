@@ -31,6 +31,7 @@ from . import sidebets
 from .counting import CardCounter, counter_key
 from .models import ModelProvider, ModelError
 from .monitor_utils import ScreenCapture, scaled_player_regions, dealer_area_rect, scaling_factors
+from .session_store import SessionStore
 from .strategy import StrategyAdvisor
 
 _ACTION_NAMES = {"S": "Stand", "H": "Hit", "D": "Double", "P": "Split", "R": "Surrender"}
@@ -53,6 +54,11 @@ class DetectionEngine:
         self.provider = ModelProvider.get()
         self.strategy = StrategyAdvisor()
         self.counter = CardCounter()
+        try:
+            self.store = SessionStore()
+        except Exception as e:  # a broken DB must never block detection
+            self.store = None
+            self.log(f"Session store unavailable: {e}")
 
         self._lock = threading.RLock()
         self.seats = [Seat(i) for i in range(constants.NUM_SEATS)]
@@ -402,6 +408,15 @@ class DetectionEngine:
         self._reset_round_state()
 
     def _reset_round_state(self):
+        # Persist the round that just ended (and the shoe state, so a restart
+        # mid-shoe doesn't lose the count) before wiping the table.
+        if self.store is not None:
+            snap = self.get_snapshot()
+            if snap and (snap["dealer"]["card"]
+                         or any(s["cards"] for s in snap["seats"])):
+                self._advice_pool.submit(
+                    self._persist_round_job, snap, self.counter.get_state(),
+                    self.round_number, self.cutting_card_seen)
         for seat in self.seats:
             seat.cards.clear()
             seat.split = False
@@ -436,6 +451,8 @@ class DetectionEngine:
                 for card in seat.cards:
                     card["counted"] = False
             self._dealer_counted = False
+        if self.store is not None:
+            self._advice_pool.submit(self._save_state_job)
         self.log("Shoe counts reset.")
         self.publish_snapshot()
 
@@ -513,6 +530,33 @@ class DetectionEngine:
 
     def adjust_counter(self, rank_key, delta):
         self.counter.adjust_manual(rank_key, delta)
+        self.publish_snapshot()
+
+    def _persist_round_job(self, snap, counter_state, round_number, cutting):
+        try:
+            self.store.record_round(snap)
+            self.store.save_shoe_state(counter_state, round_number, cutting)
+        except Exception as e:
+            if not self._ev_error_logged:
+                self._ev_error_logged = True
+                self.log(f"Session store error: {type(e).__name__}: {e}")
+
+    def _save_state_job(self):
+        try:
+            self.store.save_shoe_state(self.counter.get_state(),
+                                       self.round_number, self.cutting_card_seen)
+        except Exception:
+            pass
+
+    def apply_shoe_state(self, info):
+        """Restore a persisted shoe (counter state + round + cutting card)."""
+        with self._lock:
+            self.counter.apply_state(info["state"])
+            self.round_number = max(1, int(info.get("round_number") or 1))
+            self.cutting_card_seen = bool(info.get("cutting_card_seen"))
+        self.log(f"Shoe restored — round {self.round_number}, "
+                 f"{self.counter.cards_seen} cards seen, "
+                 f"running count {self.counter.running_count:+d}.")
         self.publish_snapshot()
 
     def refresh_settings(self):

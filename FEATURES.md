@@ -243,7 +243,17 @@ Bankroll field in the left panel (auto-filled by OCR later — see TASKS.md open
 
 **Effort:** ~1–2 days.
 
-## 8. Session analytics & shoe persistence
+## 8. ✅ DONE — Session analytics & shoe persistence
+
+> **Shipped 2026-06-09.** `lib/logic/session_store.py` (SQLite,
+> `output/session.db`): every completed round is recorded (counts, dealer
+> card + playout, per-seat cards/advice/optimal, insurance, side-bet EVs) and
+> the shoe state persists at each round end — on restart the app offers to
+> restore a recent mid-shoe count (round, cards seen, running count). The 📊
+> Session Stats window shows rounds, TC distribution, raise spots, insurance
+> and +EV side-bet opportunities (this session or all time) with CSV export.
+> Writes run on the advice thread, never blocking detection.
+> Tests: `tests/test_session_store.py` (7 cases incl. engine integration).
 
 **What:** Persist every round to SQLite/JSONL: timestamp, shoe id, round, composition
 snapshot, TC at bet time, advised vs taken action, dealer result, P&L. Dashboard tab:
@@ -313,6 +323,11 @@ Detection quality is the foundation under every EV feature above.
 
 1 → 5 → 2 (one coherent "precise advice" release, ~a week)
 then 4 → 3 (side bets), then 9 → 10 (portability), then 6, 7, 8.
+
+**Status: all 10 features shipped 2026-06-09** (plus an adversarial-review fix
+round: async advice architecture, dealer-cache thrash fix, dealer playout
+counting). Remaining open ideas live in TASKS.md (OCR balance/bet, local YOLO
+weights, dealer-suit detection).
 
 ---
 

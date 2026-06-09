@@ -79,6 +79,29 @@ class CardCounter:
             self.suit_seen = {}
             self.rank_seen_nosuit = {}
 
+    def get_state(self) -> dict:
+        """Serializable shoe state for persistence (Feature 8)."""
+        with self._lock:
+            return {
+                "deck_count": self.deck_count,
+                "running_count": self.running_count,
+                "cards_seen": self.cards_seen,
+                "per_rank": dict(self.per_rank),
+                "suit_seen": dict(self.suit_seen),
+                "rank_seen_nosuit": dict(self.rank_seen_nosuit),
+            }
+
+    def apply_state(self, state: dict):
+        """Restore a persisted shoe state (inverse of get_state)."""
+        with self._lock:
+            self.deck_count = int(state.get("deck_count", self.deck_count))
+            self.running_count = int(state.get("running_count", 0))
+            self.cards_seen = int(state.get("cards_seen", 0))
+            per_rank = state.get("per_rank", {})
+            self.per_rank = {k: int(per_rank.get(k, 0)) for k in COUNTER_KEYS}
+            self.suit_seen = dict(state.get("suit_seen", {}))
+            self.rank_seen_nosuit = dict(state.get("rank_seen_nosuit", {}))
+
     @property
     def decks_remaining(self) -> float:
         return max(0.5, self.deck_count - self.cards_seen / 52.0)

@@ -50,6 +50,7 @@ class ModernBlackjackGUI(tk.Tk):
         self.after(constants.SNAPSHOT_POLL_MS, self._poll_snapshot)
         self.after(300, lambda: self.table.preload_images())
         self.after(150, self._auto_select_monitor)
+        self.after(600, self._maybe_restore_shoe)
         self.set_status("Ready — confirm a monitor, then press Start Detection.")
 
     # ------------------------------------------------------------ left panel
@@ -157,6 +158,9 @@ class ModernBlackjackGUI(tk.Tk):
                      tooltip="Open the live log window").pack(fill=tk.X, pady=4)
         self._button(section, "⚙  Settings", self._open_settings, C["text_secondary"],
                      tooltip="Table rules, deck count, side-bet paytables"
+                     ).pack(fill=tk.X, pady=4)
+        self._button(section, "📊  Session Stats", self._open_stats, C["text_secondary"],
+                     tooltip="Round history, count distribution, CSV export"
                      ).pack(fill=tk.X, pady=4)
 
     def _build_counters_section(self, parent):
@@ -440,6 +444,36 @@ class ModernBlackjackGUI(tk.Tk):
 
     def _on_split_click(self, seat_idx, currently_split):
         self.controller.engine.set_split(seat_idx, not currently_split)
+
+    def _open_stats(self):
+        store = self.controller.engine.store
+        if store is None:
+            self.set_status("Session store unavailable.", error=True)
+            return
+        from .stats_window import StatsWindow
+        StatsWindow(self, store)
+
+    def _maybe_restore_shoe(self):
+        """Offer to restore a recent mid-shoe count after a restart."""
+        engine = self.controller.engine
+        if engine.store is None:
+            return
+        try:
+            info = engine.store.load_recent_shoe_state()
+        except Exception:
+            return
+        if info is None:
+            return
+        state = info["state"]
+        minutes = int(info["age_s"] / 60)
+        if messagebox.askyesno(
+                "Restore shoe?",
+                f"A shoe from {minutes} min ago was found:\n"
+                f"round {info['round_number']}, {state.get('cards_seen', 0)} cards seen, "
+                f"running count {state.get('running_count', 0):+d}.\n\n"
+                "Restore it? (Choose No after a shuffle.)"):
+            engine.apply_shoe_state(info)
+            self.set_status("Previous shoe restored — counts are live again.")
 
     def _set_bankroll(self):
         from ..common import settings
