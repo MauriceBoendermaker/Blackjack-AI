@@ -23,6 +23,7 @@ import cv2
 from ..common import constants
 from ..common.card_mappings import PLAYER_CLASS_MAP, DEALER_CLASS_MAP, CUTTING_CARD_CLASS
 from . import cards
+from . import deviations
 from . import ev_engine
 from .counting import CardCounter
 from .models import ModelProvider, ModelError
@@ -426,6 +427,24 @@ class DetectionEngine:
                 return part
         return None
 
+    @staticmethod
+    def _index_advice(names, dealer_rank, true_count):
+        """Illustrious 18 / Fab 4 annotation for a seat ('' when none applies)."""
+        hand = [c for c in names if c and c != "-"]
+        dealer = cards.dealer_strategy_rank(dealer_rank)
+        if len(hand) < 2 or dealer is None or cards.hand_value(hand) >= 21:
+            return "", constants.ACTION_COLORS["-"]
+        dev = deviations.index_advice(cards.hand_key(hand), dealer, true_count,
+                                      two_cards=len(hand) == 2)
+        if dev is None:
+            return "", constants.ACTION_COLORS["-"]
+        rel = ">=" if dev["triggered"] else "<"
+        text = (f"Index: {_ACTION_NAMES[dev['action']]} "
+                f"(TC {true_count:+.1f} {rel} {dev['index']:+d})")
+        color = (constants.ACTION_COLORS[_ACTION_COLOR_KEYS[dev["action"]]]
+                 if dev["triggered"] else constants.ACTION_COLORS["-"])
+        return text, color
+
     def _insurance_advice(self, dealer_rank, per_rank):
         """Table-level insurance call when the dealer shows an ace, else None."""
         if not dealer_rank or cards.dealer_strategy_rank(dealer_rank) != "A":
@@ -460,6 +479,8 @@ class DetectionEngine:
                     optimal = (f"Even money: {'TAKE' if take else 'Decline'} "
                                f"({insurance['even_money_edge']:+.3f})")
                     optimal_color = constants.ACTION_COLORS["H" if take else "R/H"]
+                index_text, index_color = self._index_advice(
+                    names, dealer_rank, count["true"])
                 seats.append({
                     "index": seat.index,
                     "cards": names,
@@ -469,6 +490,8 @@ class DetectionEngine:
                     "advice_color": color,
                     "optimal": optimal,
                     "optimal_color": optimal_color,
+                    "index_advice": index_text,
+                    "index_color": index_color,
                 })
             snapshot = {
                 "seq": 0,

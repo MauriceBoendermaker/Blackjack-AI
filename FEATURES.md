@@ -64,7 +64,15 @@ the exact composition can, and the app already holds it.
 
 **Effort:** ~3–5 days incl. tests. The single highest-value feature in this list.
 
-## 2. Hi-Lo index deviations — Illustrious 18 + Fab 4 annotation layer
+## 2. ✅ DONE — Hi-Lo index deviations — Illustrious 18 + Fab 4 annotation layer
+
+> **Shipped 2026-06-09.** `lib/logic/deviations.py`: full I18 + Fab 4 tables
+> (S17 + verified H17 differences), Fab4-over-I18 precedence when surrender is
+> offered, two-card gating. Per-seat "Index: <action> (TC ±x.x >=/< index)"
+> line on the table, colored when triggered. Cross-check test passes: the
+> exact-EV engine flips to the same action ±2 TC around every tested index
+> (8 cases) on realistically constructed shoes, and the insurance +3 index
+> agrees with the exact 1/3 tens threshold (`tests/test_deviations.py`).
 
 **What:** Ship the I18 + Fab 4 tables (Appendix A) as a static dict. UI shows an
 "Index says: …" annotation whenever the current true count crosses an index, with a
