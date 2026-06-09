@@ -1,14 +1,30 @@
-/blackjackvenv
-__pycache__
-.idea/Blackjack-AI.iml
-.idea/inspectionProfiles/profiles_settings.xml
-.idea/inspectionProfiles/Project_Default.xml
-.idea/misc.xml
-.idea/modules.xml
-.idea/vcs.xml
+# Virtual environments
+venv/
+.venv/
+blackjackvenv/
 
+# Python bytecode
+__pycache__/
+*.pyc
+
+# IDE / editor state
+.idea/
+.vs/
+.claude/
+
+# Runtime artifacts (screenshots, predictions, caches, logs)
+output/
+logs/
+recommendation_cache.json
+
+# Local model weights (large binaries stay out of git)
+models/*.pt
+models/*.onnx
+models/*.engine
+
+# Images are ignored by default (datasets, screenshots)...
 *.png
 *.jpg
-venv
-.claude/
-.idea/
+# ...except the app's own assets
+!assets/**/*.png
+!assets/**/*.jpg
