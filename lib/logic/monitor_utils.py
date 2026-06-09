@@ -1,8 +1,13 @@
 """Screen capture (mss, reused per thread) and player-region geometry.
 
 matplotlib is gone: point-in-polygon is a few lines of numpy ray casting.
+
+Region sources, in priority order: a user-calibrated profile saved per
+resolution (output/regions_{w}x{h}.json, written by the region editor),
+falling back to BASE_PLAYER_REGIONS scaled from the base resolution.
 """
 
+import json
 import threading
 
 import numpy as np
@@ -100,17 +105,73 @@ def scaling_factors(current_resolution):
     return cw / bw, ch / bh
 
 
-def scaled_player_regions(current_resolution):
-    """The 7 seat polygons scaled from base resolution to the live monitor."""
+# ----------------------------------------------- calibrated region profiles
+
+def regions_path(resolution):
+    w, h = resolution
+    return constants.OUTPUT_DIR / f"regions_{w}x{h}.json"
+
+
+def load_custom_regions(resolution):
+    """{"players": [[[x,y],...], ...], "dealer": [l,t,r,b]} or None.
+    Coordinates are native to `resolution` (no scaling applied)."""
+    path = regions_path(resolution)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        players = data["players"]
+        dealer = data["dealer"]
+        if (len(players) != constants.NUM_SEATS or len(dealer) != 4
+                or any(len(poly) < 3 for poly in players)):
+            raise ValueError("wrong shape")
+        return {"players": players, "dealer": [int(v) for v in dealer]}
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"Calibrated regions unreadable ({e}); using defaults.")
+        return None
+
+
+def save_custom_regions(resolution, players, dealer):
+    path = regions_path(resolution)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"players": players, "dealer": list(dealer)},
+                               indent=1), encoding="utf-8")
+
+
+def delete_custom_regions(resolution):
+    path = regions_path(resolution)
+    if path.exists():
+        path.unlink()
+
+
+def default_player_regions(current_resolution):
+    """The shipped seat polygons scaled to the live resolution (point lists)."""
     sx, sy = scaling_factors(current_resolution)
-    return [Polygon(region).scaled(sx, sy) for region in constants.BASE_PLAYER_REGIONS]
+    return [[[x * sx, y * sy] for x, y in region]
+            for region in constants.BASE_PLAYER_REGIONS]
 
 
-def dealer_area_rect(current_resolution):
-    """Dealer crop rectangle (left, top, right, bottom) at the live resolution."""
+def default_dealer_rect(current_resolution):
     sx, sy = scaling_factors(current_resolution)
     left = int(constants.DEALER_AREA_LEFT * sx)
     top = int(constants.DEALER_AREA_UPPER * sy)
     right = int((constants.DEALER_AREA_LEFT + constants.DEALER_AREA_WIDTH) * sx)
     bottom = int((constants.DEALER_AREA_UPPER + constants.DEALER_AREA_HEIGHT) * sy)
     return left, top, right, bottom
+
+
+def scaled_player_regions(current_resolution):
+    """The 7 seat polygons at the live resolution — calibrated profile when
+    one exists, else the defaults scaled from base resolution."""
+    custom = load_custom_regions(current_resolution)
+    if custom is not None:
+        return [Polygon(poly) for poly in custom["players"]]
+    return [Polygon(region) for region in default_player_regions(current_resolution)]
+
+
+def dealer_area_rect(current_resolution):
+    """Dealer crop rectangle (left, top, right, bottom) at the live resolution."""
+    custom = load_custom_regions(current_resolution)
+    if custom is not None:
+        return tuple(custom["dealer"])
+    return default_dealer_rect(current_resolution)

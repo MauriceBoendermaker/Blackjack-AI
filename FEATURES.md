@@ -268,7 +268,15 @@ engines; settings window writes the profile; ship presets ("Evolution Classic 8-
 
 **Effort:** ~2–3 days.
 
-## 10. Interactive region calibration
+## 10. ✅ DONE — Interactive region calibration
+
+> **Shipped 2026-06-09.** "✥ Calibrate Regions" opens a live screenshot with
+> all seven seat polygons and the dealer rectangle as draggable vertex
+> handles (`lib/interfaces/region_editor.py`). Saving writes a per-resolution
+> profile (`output/regions_{w}x{h}.json`) that `monitor_utils` prefers over
+> the shipped defaults (corrupt/wrong-shape profiles fall back safely), and
+> the engine reloads regions immediately. Reset-to-defaults deletes the
+> profile. Tests: `tests/test_regions.py`.
 
 **What:** Click "Calibrate" → live screenshot overlay → drag seat-polygon vertices and
 the dealer rectangle; save per resolution/table profile (already an open task).

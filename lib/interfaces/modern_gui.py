@@ -148,6 +148,11 @@ class ModernBlackjackGUI(tk.Tk):
             tooltip="Capture the table and show the detected cards + seat regions")
         self.regions_btn.pack(fill=tk.X, pady=4)
         self.regions_btn.config(state="disabled")
+        self.calibrate_btn = self._button(
+            section, "✥  Calibrate Regions", self._calibrate_regions, C["bg_canvas_soft"],
+            tooltip="Drag the seat polygons and dealer area over a live screenshot")
+        self.calibrate_btn.pack(fill=tk.X, pady=4)
+        self.calibrate_btn.config(state="disabled")
         self._button(section, "🗒  View Logs", self._open_logs, C["text_secondary"],
                      tooltip="Open the live log window").pack(fill=tk.X, pady=4)
         self._button(section, "⚙  Settings", self._open_settings, C["text_secondary"],
@@ -254,6 +259,7 @@ class ModernBlackjackGUI(tk.Tk):
             fg=C["success"])
         self.start_btn.config(state="normal")
         self.regions_btn.config(state="normal")
+        self.calibrate_btn.config(state="normal")
         self.set_status(f"Monitor {idx + 1} confirmed ({self.monitor.width}x{self.monitor.height}).")
 
     def _toggle_detection(self):
@@ -417,6 +423,20 @@ class ModernBlackjackGUI(tk.Tk):
     def _open_settings(self):
         from .settings_dialog import SettingsDialog
         SettingsDialog(self, on_apply=self.controller.engine.refresh_settings)
+
+    def _calibrate_regions(self):
+        if self.monitor is None:
+            return
+        from .region_editor import RegionEditor
+
+        def reload_regions():
+            self.controller.set_monitor(self.monitor)
+            self.set_status("Regions saved — detection now uses the calibrated layout.")
+
+        try:
+            RegionEditor(self, self.controller.engine.capture, on_save=reload_regions)
+        except Exception as e:
+            self.set_status(f"Calibration failed: {e}", error=True)
 
     def _on_close(self):
         self.controller.stop()
