@@ -17,9 +17,10 @@ C = constants.COLORS
 
 
 class TableView:
-    def __init__(self, parent, on_card_click, on_dealer_click):
+    def __init__(self, parent, on_card_click, on_dealer_click, on_split_click=None):
         self.on_card_click = on_card_click
         self.on_dealer_click = on_dealer_click
+        self.on_split_click = on_split_click or (lambda *a: None)
 
         self.canvas = tk.Canvas(parent, bg=C["bg_canvas"], highlightthickness=0)
         self._image_cache = {}
@@ -58,6 +59,9 @@ class TableView:
                                   bg=C["bg_canvas"], fg=C["text_on_felt"],
                                   wraplength=118, justify="center"),
                 "add": None,          # "+" button, created lazily
+                "split_btn": None,    # Split / Undo split badge, created lazily
+                "hand_of": [],        # per-card hand tag from the snapshot
+                "is_split": False,
                 "pos": (0, 0),
             })
 
@@ -142,18 +146,32 @@ class TableView:
         seat = self.seats[i]
         x, top = seat["pos"]
         card_w, card_h = constants.CARD_RENDER_SIZE
+        hand_of = seat["hand_of"]
+        split = seat["is_split"] and any(h == 1 for h in hand_of)
+        depth = [0, 0]  # cards placed so far per hand (split layout)
         for j, lbl in enumerate(seat["cards"]):
-            lbl.place(x=x - card_w / 2 + min(j, 3) * 16, y=top + j * 26, anchor="nw")
+            if split:
+                h = hand_of[j] if j < len(hand_of) else 0
+                col_x = x - card_w / 2 + (-40 if h == 0 else 40)
+                lbl.place(x=col_x + min(depth[h], 3) * 12, y=top + depth[h] * 26,
+                          anchor="nw")
+                depth[h] += 1
+            else:
+                lbl.place(x=x - card_w / 2 + min(j, 3) * 16, y=top + j * 26, anchor="nw")
             lbl.lift()
-        n_cards = max(len(seat["cards"]), 1)
+        n_cards = max(max(depth) if split else len(seat["cards"]), 1)
         base_y = top + card_h + (n_cards - 1) * 26 + 6
         seat["total"].place(x=x, y=base_y, anchor="n")
         seat["advice"].place(x=x, y=base_y + 22, anchor="n")
-        seat["optimal"].place(x=x, y=base_y + 44, anchor="n")
-        seat["index"].place(x=x, y=base_y + 62, anchor="n")
-        seat["name"].place(x=x, y=base_y + 80, anchor="n")
+        offset = 44 + (18 if "\n" in seat["advice"].cget("text") else 0)
+        seat["optimal"].place(x=x, y=base_y + offset, anchor="n")
+        seat["index"].place(x=x, y=base_y + offset + 18, anchor="n")
+        seat["name"].place(x=x, y=base_y + offset + 36, anchor="n")
         if seat["add"] is not None:
-            seat["add"].place(x=x + card_w / 2 + 14, y=top + card_h / 2, anchor="w")
+            seat["add"].place(x=x + card_w / 2 + (54 if split else 14),
+                              y=top + card_h / 2, anchor="w")
+        if seat["split_btn"] is not None:
+            seat["split_btn"].place(x=x, y=top - 22, anchor="n")
 
     # ----------------------------------------------------------------- update
 
@@ -240,6 +258,30 @@ class TableView:
             seat["add"].destroy()
             seat["add"] = None
 
+        hand_of = snap.get("hand_of", [0] * len(snap["cards"]))
+        is_split = snap.get("split", False)
+        if hand_of != seat["hand_of"] or is_split != seat["is_split"]:
+            seat["hand_of"] = list(hand_of)
+            seat["is_split"] = is_split
+            layout_dirty = True
+
+        want_split_btn = snap.get("can_split", False) or is_split
+        if want_split_btn and seat["split_btn"] is None:
+            btn = tk.Label(self.canvas, text="", font=constants.FONT_SMALL,
+                           bg=C["badge_bg"], fg=C["text_on_felt"],
+                           padx=6, cursor="hand2")
+            btn.bind("<Button-1>",
+                     lambda e, s=i: self.on_split_click(s, self.seats[s]["is_split"]))
+            seat["split_btn"] = btn
+            layout_dirty = True
+        elif not want_split_btn and seat["split_btn"] is not None:
+            seat["split_btn"].destroy()
+            seat["split_btn"] = None
+        if seat["split_btn"] is not None:
+            label = "Undo split" if is_split else "Split ▸ two hands"
+            if seat["split_btn"].cget("text") != label:
+                seat["split_btn"].config(text=label)
+
         if layout_dirty:
             self._place_seat(i)
 
@@ -260,6 +302,8 @@ class TableView:
                 seat[key].place_forget()
             if seat["add"] is not None:
                 seat["add"].place_forget()
+            if seat["split_btn"] is not None:
+                seat["split_btn"].place_forget()
         self.dealer_title.place_forget()
         self.dealer_card_lbl.place_forget()
         self.dealer_insurance.place_forget()

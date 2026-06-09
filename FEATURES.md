@@ -193,7 +193,16 @@ advice at all.
 
 **Effort:** half a day. Highest value-per-line-of-code in the list.
 
-## 6. Split-hand support
+## 6. ✅ DONE — Split-hand support
+
+> **Shipped 2026-06-09.** A "Split ▸ two hands" badge appears over any seat
+> holding a pair; splitting seeds hand 1/hand 2 from the pair and routes later
+> detections to the nearer hand by x-position (manual adds go to the shorter
+> hand). The table renders two card columns with per-hand totals, book advice,
+> and exact-EV lines. Post-split correctness: no resplit/surrender EVs, double
+> only under DAS, pairs use their total row in the CSV, two-card 21 is not
+> blackjack, split aces show "Stand (one card)". Round reset clears splits.
+> Tests: `tests/test_split.py` (7 cases).
 
 **What:** After a split, a seat holds two hands: group the seat's cards into hand 1 /
 hand 2 (spatial clustering within the seat polygon), render two card rows, and advise

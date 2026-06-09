@@ -37,11 +37,12 @@ _ACTION_COLOR_KEYS = {"S": "S", "H": "H", "D": "D/H", "P": "P", "R": "R/H"}
 
 
 class Seat:
-    __slots__ = ("index", "cards")
+    __slots__ = ("index", "cards", "split")
 
     def __init__(self, index):
         self.index = index
-        self.cards = []  # list of dicts: name, confidence, cx, cy, manual, counted
+        self.cards = []  # dicts: name, confidence, cx, cy, manual, counted, hand
+        self.split = False  # seat plays two hands; cards carry a hand tag (0/1)
 
 
 class DetectionEngine:
@@ -337,13 +338,35 @@ class DetectionEngine:
         return False
 
     def _lock_card(self, seat, pred):
+        hand = self._assign_hand(seat, pred["cx"]) if seat.split else 0
         seat.cards.append({
             "name": pred["name"], "confidence": pred["confidence"],
             "cx": pred["cx"], "cy": pred["cy"], "manual": False, "counted": True,
+            "hand": hand,
         })
         self.counter.count_card(pred["name"])
-        self.log(f"P{seat.index + 1} card {len(seat.cards)}: "
+        tag = f" (hand {hand + 1})" if seat.split else ""
+        self.log(f"P{seat.index + 1} card {len(seat.cards)}{tag}: "
                  f"{pred['name']} ({pred['confidence'] * 100:.0f}%)")
+
+    @staticmethod
+    def _assign_hand(seat, cx):
+        """After a split, route a new detection to the nearer hand by the mean
+        x of each hand's positioned cards (split hands sit side by side)."""
+        if cx is None:
+            counts = [sum(1 for c in seat.cards if c["hand"] == h) for h in (0, 1)]
+            return 0 if counts[0] <= counts[1] else 1
+        means = []
+        for h in (0, 1):
+            xs = [c["cx"] for c in seat.cards if c["hand"] == h and c["cx"] is not None]
+            means.append(sum(xs) / len(xs) if xs else None)
+        if means[0] is None and means[1] is None:
+            return 0
+        if means[0] is None:
+            return 0 if cx < means[1] else 1
+        if means[1] is None:
+            return 1 if cx > means[0] else 0
+        return 0 if abs(cx - means[0]) <= abs(cx - means[1]) else 1
 
     # ----------------------------------------------------------- round flow
 
@@ -380,6 +403,7 @@ class DetectionEngine:
     def _reset_round_state(self):
         for seat in self.seats:
             seat.cards.clear()
+            seat.split = False
         self._pending_extra.clear()
         self._dealer_history.clear()
         self._pending_dealer.clear()
@@ -438,15 +462,42 @@ class DetectionEngine:
                     # card detached by reset_shoe stays out of the fresh count.
                     seat.cards[slot] = {"name": card_name, "confidence": 1.0,
                                         "cx": old["cx"], "cy": old["cy"],
-                                        "manual": True, "counted": old["counted"]}
+                                        "manual": True, "counted": old["counted"],
+                                        "hand": old.get("hand", 0)}
                     if old["counted"]:
                         self.counter.count_card(card_name)
                     self.log(f"P{seat_idx + 1} card {slot + 1} set to {card_name}.")
             elif card_name is not None and len(seat.cards) < constants.MAX_CARDS_PER_SEAT:
+                hand = self._assign_hand(seat, None) if seat.split else 0
                 seat.cards.append({"name": card_name, "confidence": 1.0,
-                                   "cx": None, "cy": None, "manual": True, "counted": True})
+                                   "cx": None, "cy": None, "manual": True,
+                                   "counted": True, "hand": hand})
                 self.counter.count_card(card_name)
                 self.log(f"P{seat_idx + 1} card {len(seat.cards)} added: {card_name}.")
+        self.publish_snapshot()
+
+    def set_split(self, seat_idx, on=True):
+        """Split a seat's pair into two hands (or undo). Card 1 seeds hand 1,
+        card 2 seeds hand 2; later cards route to the nearer hand by position."""
+        with self._lock:
+            seat = self.seats[seat_idx]
+            if on:
+                if seat.split or len(seat.cards) < 2 or not cards.is_pair(
+                        [c["name"] for c in seat.cards[:2]]):
+                    return
+                seat.split = True
+                seat.cards[0]["hand"] = 0
+                seat.cards[1]["hand"] = 1
+                for c in seat.cards[2:]:
+                    c["hand"] = self._assign_hand(seat, c["cx"])
+                self.log(f"P{seat_idx + 1} split into two hands.")
+            else:
+                if not seat.split:
+                    return
+                seat.split = False
+                for c in seat.cards:
+                    c["hand"] = 0
+                self.log(f"P{seat_idx + 1} split undone.")
         self.publish_snapshot()
 
     def replace_dealer(self, card_name):
@@ -477,7 +528,8 @@ class DetectionEngine:
 
     # ------------------------------------------------------------- snapshot
 
-    def _optimal_advice(self, names, dealer_rank, per_rank, csv_action):
+    def _optimal_advice(self, names, dealer_rank, per_rank, csv_action,
+                        post_split=False):
         """Exact composition-dependent advice for a seat ('' when no decision).
 
         Non-blocking: returns the cached EV result when this exact
@@ -488,7 +540,7 @@ class DetectionEngine:
         hand = [c for c in names if c and c != "-"]
         if len(hand) < 2 or not dealer_rank or cards.hand_value(hand) >= 21:
             return "", constants.ACTION_COLORS["-"]
-        key = (tuple(sorted(hand)), dealer_rank,
+        key = (tuple(sorted(hand)), dealer_rank, post_split,
                tuple(sorted(per_rank.items())), self.counter.deck_count,
                tuple(sorted(constants.RULES.items())))
         with self._advice_lock:
@@ -496,7 +548,7 @@ class DetectionEngine:
                 if key not in self._advice_pending:
                     self._advice_pending.add(key)
                     self._advice_pool.submit(self._advice_job, key, list(hand),
-                                             dealer_rank, dict(per_rank))
+                                             dealer_rank, dict(per_rank), post_split)
                 return "Optimal: …", constants.ACTION_COLORS["-"]
             result = self._advice_cache[key]
         if result is None:
@@ -507,10 +559,11 @@ class DetectionEngine:
             text += " ≠ book"
         return text, constants.ACTION_COLORS[_ACTION_COLOR_KEYS[best]]
 
-    def _advice_job(self, key, hand, dealer_rank, per_rank):
+    def _advice_job(self, key, hand, dealer_rank, per_rank, post_split=False):
         try:
             result = ev_engine.advise(hand, dealer_rank, per_rank,
-                                      self.counter.deck_count)
+                                      self.counter.deck_count,
+                                      post_split=post_split)
         except Exception as e:
             result = None
             if not self._ev_error_logged:
@@ -617,6 +670,52 @@ class DetectionEngine:
             self._sidebet_pending = False
         self.publish_snapshot()
 
+    def _split_seat_snapshot(self, seat, names, dealer_rank, ev_count, true_count):
+        """Per-hand advice for a split seat. The combined lines show both
+        hands; the flat card list keeps engine order so the picker still
+        addresses cards by slot."""
+        split_aces = (cards.rank_of(names[0]) == "Ace"
+                      and not constants.RULES["hit_split_aces"])
+        hand_lines = {"total": [], "advice": [], "optimal": []}
+        advice_color = optimal_color = constants.ACTION_COLORS["-"]
+        for h in (0, 1):
+            hand_names = [c["name"] for c in seat.cards if c.get("hand", 0) == h]
+            if not hand_names:
+                continue
+            if split_aces and len(hand_names) >= 2:
+                action, text, color = "S", "Stand (one card)", constants.ACTION_COLORS["S"]
+                optimal, opt_color = "", constants.ACTION_COLORS["-"]
+            else:
+                action, text, color = self.strategy.advice(
+                    hand_names, dealer_rank, post_split=True)
+                optimal, opt_color = self._optimal_advice(
+                    hand_names, dealer_rank, ev_count["per_rank"], action,
+                    post_split=True)
+            label = cards.describe_hand(hand_names) if hand_names else "—"
+            hand_lines["total"].append(f"H{h + 1}: {label}")
+            if text:
+                hand_lines["advice"].append(f"H{h + 1}: {text}")
+                advice_color = color
+            if optimal:
+                hand_lines["optimal"].append(
+                    f"H{h + 1} {optimal.replace('Optimal: ', '')}")
+                optimal_color = opt_color
+        return {
+            "index": seat.index,
+            "cards": names,
+            "manual": [c["manual"] for c in seat.cards],
+            "hand_of": [c.get("hand", 0) for c in seat.cards],
+            "split": True,
+            "can_split": False,
+            "total": "  ·  ".join(hand_lines["total"]),
+            "advice": "\n".join(hand_lines["advice"]),
+            "advice_color": advice_color,
+            "optimal": "\n".join(hand_lines["optimal"]),
+            "optimal_color": optimal_color,
+            "index_advice": "",
+            "index_color": constants.ACTION_COLORS["-"],
+        }
+
     def _ev_count(self, count):
         """The composition the EV engines must see. After a mid-round shoe
         reset, cards still on the table are detached from the counter
@@ -645,6 +744,10 @@ class DetectionEngine:
             seats = []
             for seat in self.seats:
                 names = [c["name"] for c in seat.cards]
+                if seat.split:
+                    seats.append(self._split_seat_snapshot(
+                        seat, names, dealer_rank, ev_count, count["true"]))
+                    continue
                 action, text, color = self.strategy.advice(names, dealer_rank)
                 optimal, optimal_color = self._optimal_advice(
                     names, dealer_rank, ev_count["per_rank"], action)
@@ -661,6 +764,10 @@ class DetectionEngine:
                     "index": seat.index,
                     "cards": names,
                     "manual": [c["manual"] for c in seat.cards],
+                    "hand_of": [c.get("hand", 0) for c in seat.cards],
+                    "split": False,
+                    "can_split": (len(names) == 2 and cards.is_pair(names)
+                                  and cards.hand_value(names) < 21),
                     "total": cards.describe_hand(names),
                     "advice": text,
                     "advice_color": color,

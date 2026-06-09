@@ -338,14 +338,16 @@ def insurance_advice(per_rank: dict, deck_count: int | None = None,
 
 
 @lru_cache(maxsize=20_000)
-def evaluate(hand: tuple, up_idx: int, comp: tuple, rules: Rules = DEFAULT_RULES) -> dict:
+def evaluate(hand: tuple, up_idx: int, comp: tuple, rules: Rules = DEFAULT_RULES,
+             post_split: bool = False) -> dict:
     """Exact EVs for a hand (tuple of composition indices, any order) against
     `up_idx`, with `comp` the unseen composition (hand + up-card excluded).
 
     Returns {"evs": {code: ev}, "best": code, "p_dealer_bj": float} with codes
     S/H/D/P/R; D, P, R appear only when the action is available. EVs are in
     units of the initial bet and — for ENHC rules — include the
-    dealer-blackjack branch."""
+    dealer-blackjack branch. `post_split` hands can't resplit or surrender
+    and may double only under DAS."""
     if len(_DEALER_CACHE) > _DEALER_CACHE_LIMIT:
         _DEALER_CACHE.clear()  # boundary clear: never evicts mid-recursion
     ev = _Evaluator(up_idx, rules)
@@ -357,11 +359,11 @@ def evaluate(hand: tuple, up_idx: int, comp: tuple, rules: Rules = DEFAULT_RULES
         "H": ev.ev_hit(total, soft, comp),
     }
     if two_cards:
-        if ev._can_double(total, soft):
+        if ev._can_double(total, soft) and (not post_split or rules.das):
             evs["D"] = ev.ev_double(total, soft, comp)
-        if hand[0] == hand[1]:
+        if hand[0] == hand[1] and not post_split:
             evs["P"] = ev.ev_split(hand[0], comp)
-        if rules.surrender:
+        if rules.surrender and not post_split:
             evs["R"] = -0.5
 
     # ENHC: mix in the dealer-blackjack branch (peek games are already
@@ -394,7 +396,8 @@ def evaluate(hand: tuple, up_idx: int, comp: tuple, rules: Rules = DEFAULT_RULES
 
 
 def advise(player_cards, dealer_rank, per_rank: dict,
-           deck_count: int | None = None, rules: Rules | None = None):
+           deck_count: int | None = None, rules: Rules | None = None,
+           post_split: bool = False):
     """Card names + CardCounter per-rank totals -> evaluate() result, or None
     when no decision applies (too few cards, bust/21, unknown dealer card)."""
     if deck_count is None:
@@ -411,4 +414,4 @@ def advise(player_cards, dealer_rank, per_rank: dict,
     comp = comp_from_per_rank(per_rank, deck_count)
     if any(c < 0 for c in comp) or sum(comp) <= 1:
         return None
-    return evaluate(indices, card_index(dealer_rank), comp, rules)
+    return evaluate(indices, card_index(dealer_rank), comp, rules, post_split)

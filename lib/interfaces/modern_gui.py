@@ -219,7 +219,8 @@ class ModernBlackjackGUI(tk.Tk):
         wrapper.grid(row=0, column=1, sticky="nsew", padx=12, pady=12)
         wrapper.rowconfigure(0, weight=1)
         wrapper.columnconfigure(0, weight=1)
-        self.table = TableView(wrapper, self._on_card_click, self._on_dealer_click)
+        self.table = TableView(wrapper, self._on_card_click, self._on_dealer_click,
+                               self._on_split_click)
         self.table.canvas.grid(row=0, column=0, sticky="nsew")
 
     def _build_status_bar(self):
@@ -423,6 +424,9 @@ class ModernBlackjackGUI(tk.Tk):
     def _open_settings(self):
         from .settings_dialog import SettingsDialog
         SettingsDialog(self, on_apply=self.controller.engine.refresh_settings)
+
+    def _on_split_click(self, seat_idx, currently_split):
+        self.controller.engine.set_split(seat_idx, not currently_split)
 
     def _calibrate_regions(self):
         if self.monitor is None:
