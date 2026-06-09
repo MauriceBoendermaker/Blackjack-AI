@@ -1,22 +1,53 @@
-VERSION = "2.0"
+"""Central configuration: paths, detection settings, game rules, and UI theme."""
+
+import os
+from pathlib import Path
+
+VERSION = "3.0"
 TITLE = f"Blackjack AI - v{VERSION}"
-SIZE = "1600x1000"
-RESOLUTION = "2560x1440"
 
-FONT_FAMILY = "Helvetica"
-FONT_SIZE_SMALL = 10
-FONT_SIZE_NORMAL = 12
-FONT_SIZE_LARGE = 14
+# ---------------------------------------------------------------------------
+# Paths (anchored to the project root so the app works from any CWD)
+# ---------------------------------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ASSETS_DIR = PROJECT_ROOT / "assets"
+CARDS_DIR = ASSETS_DIR / "cards"
+STRATEGY_CSV_PATH = ASSETS_DIR / "strategy.csv"
+MODELS_DIR = PROJECT_ROOT / "models"
+OUTPUT_DIR = PROJECT_ROOT / "output"
+LOGS_DIR = PROJECT_ROOT / "logs"
 
-DEFAULT_FONT = (FONT_FAMILY, FONT_SIZE_NORMAL)
-SMALL_FONT = (FONT_FAMILY, FONT_SIZE_SMALL)
-LARGE_FONT = (FONT_FAMILY, FONT_SIZE_LARGE, "bold")
-TOOLTIP_FONT = (FONT_FAMILY, FONT_SIZE_SMALL)
+CARD_BACK_IMAGE_PATH = CARDS_DIR / "card_back.png"
 
-PRIMARY_COLOR = "#000000"
-HIGHLIGHT_COLOR = "#3366cc"
-ERROR_COLOR = "#ff0000"
 
+def card_image_path(card_name: str) -> Path:
+    """'Ace of Spades' -> assets/cards/ace_of_spades.png (files are lowercase)."""
+    return CARDS_DIR / f"{card_name.replace(' ', '_').lower()}.png"
+
+
+# ---------------------------------------------------------------------------
+# Detection models
+# ---------------------------------------------------------------------------
+# The API key can be overridden without touching code: set ROBOFLOW_API_KEY.
+ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY", "WBy7jG6AiiqjzifOfiNH")
+
+PROJECT_ID_PLAYERS = "dey022"
+MODEL_VERSION_PLAYERS = 1
+PROJECT_ID_DEALER = "carddetection-v1hqz"
+MODEL_VERSION_DEALER = 17
+
+PREDICTION_CONFIDENCE_PLAYERS = 70
+PREDICTION_OVERLAP_PLAYERS = 100
+PREDICTION_CONFIDENCE_DEALER = 55
+PREDICTION_OVERLAP_DEALER = 45
+
+# Frames sent to the hosted API are downscaled to this width before upload
+# (predictions are scaled back). Big upload-time win, negligible accuracy loss.
+API_UPLOAD_MAX_WIDTH = 1280
+
+# ---------------------------------------------------------------------------
+# Table layout (screen regions, defined at the base capture resolution)
+# ---------------------------------------------------------------------------
 BASE_RESOLUTION = (2560, 1440)
 BASE_PLAYER_REGIONS = [
     [[476, 1096], [604, 1228], [1072, 948], [1076, 832], [476, 1096]],
@@ -25,88 +56,112 @@ BASE_PLAYER_REGIONS = [
     [[1112, 1392], [1424, 1392], [1372, 944], [1308, 944], [1112, 1392]],
     [[1424, 1392], [1716, 1340], [1456, 940], [1372, 944], [1424, 1392]],
     [[1716, 1336], [1940, 1236], [1572, 940], [1456, 940], [1716, 1336]],
-    [[1940, 1236], [2072, 1096], [1572, 840], [1572, 940], [1940, 1236]]
+    [[1940, 1236], [2072, 1096], [1572, 840], [1572, 940], [1940, 1236]],
 ]
+NUM_SEATS = len(BASE_PLAYER_REGIONS)
 
-PREDICTION_CONFIDENCE_PLAYERS = 70
-PREDICTION_OVERLAP_PLAYERS = 100
-PREDICTION_CONFIDENCE_DEALER = 55
-PREDICTION_OVERLAP_DEALER = 45
+DEALER_AREA_LEFT = 1548
+DEALER_AREA_UPPER = 12
+DEALER_AREA_WIDTH, DEALER_AREA_HEIGHT = 1000, 800
 
-ROBOFLOW_API_KEY = "WBy7jG6AiiqjzifOfiNH"
+# ---------------------------------------------------------------------------
+# Detection engine tuning
+# ---------------------------------------------------------------------------
+# Producer loop pacing (seconds) by activity state.
+CYCLE_SLEEP_DEALING = 0.4
+CYCLE_SLEEP_COMPLETE = 1.0
+CYCLE_SLEEP_WAITING = 1.2
 
-PROJECT_ID_PLAYERS = "dey022"
-MODEL_VERSION_PLAYERS = 1
-# PREDICTION_CONFIDENCE_PLAYERS = 70
-# PREDICTION_OVERLAP_PLAYERS = 100
+# Mean absolute pixel difference (0-255 scale, on a small grayscale thumbnail)
+# below which the frame is considered unchanged and inference is skipped.
+FRAME_DIFF_THRESHOLD = 2.0
+# Never skip more than this many consecutive cycles, even if the frame looks static.
+MAX_SKIPPED_CYCLES = 8
 
-PROJECT_ID_DEALER = "carddetection-v1hqz"
-MODEL_VERSION_DEALER = 17
-# PREDICTION_CONFIDENCE_DEALER = 55
-# PREDICTION_OVERLAP_DEALER = 45
+# A detection within this many pixels (at base resolution) of an already
+# locked card with the same rank+suit is treated as the same physical card.
+SAME_CARD_DISTANCE_PX = 80
+# Cards beyond the first two per seat (hits) must be seen in this many
+# consecutive cycles before they are accepted.
+EXTRA_CARD_CONFIRM_CYCLES = 2
+# Dealer card must agree across this many consecutive frames to lock.
+DEALER_CONFIRM_FRAMES = 2
+MAX_CARDS_PER_SEAT = 6
 
-CARD_FOLDER_PATH = "../api/cards"
-DEFAULT_CARD_IMAGE_PATH = "../api/cards/red card.jpg"
-INPUT_SCREENSHOT_PATH = "INPUT_current_screen.jpg"
-INPUT_DEALER_PATH = "INPUT_dealer.jpg"
-INPUT_FULL_PATH = "INPUT_full.jpg"
-OUTPUT_PREDICTION_PATH = "OUTPUT_prediction.jpg"
-OUTPUT_FINAL_PREDICTION_PATH = "OUTPUT_final_prediction_with_players.jpg"
-OUTPUT_DEBUG_IMAGE_PATH = "OUTPUT_dealer_area_current_view.jpg"
-CSV_FILE_PATH = "lib/Blackjack cheat sheet table.csv"
+# How often the GUI polls the engine for a fresh snapshot (ms).
+SNAPSHOT_POLL_MS = 120
 
-CARD_VALUES = ["Ace", "10", "9", "8", "7", "6", "5", "4", "3", "2"]
+# ---------------------------------------------------------------------------
+# Game rules
+# ---------------------------------------------------------------------------
+BASE_BET = 10
+DECK_COUNT = 8
+
+CARD_RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "King", "Ace"]
+CARD_SUITS = ["Spades", "Hearts", "Diamonds", "Clubs"]
 
 VALUE_MAPPING = {
-    '2': 2,
-    '3': 3,
-    '4': 4,
-    '5': 5,
-    '6': 6,
-    '7': 7,
-    '8': 8,
-    '9': 9,
-    '10': 10,
-    'Jack': 10,
-    'Queen': 10,
-    'King': 10,
-    'Ace': 11
+    "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, "10": 10,
+    "Jack": 10, "Queen": 10, "King": 10, "Ace": 11,
 }
 
 ACTION_MAPPING = {
     "H": "Hit",
     "S": "Stand",
-    "D/H": "Double/Hit",
-    "D/S": "Double/Stand",
+    "D/H": "Double / Hit",
+    "D/S": "Double / Stand",
     "P": "Split",
+    "P/H": "Split / Hit",
+    "R/H": "Surrender / Hit",
     "-": "-",
-    "R/H": "Surrender/Hit"
+}
+
+# ---------------------------------------------------------------------------
+# UI theme (single source of truth for every window)
+# ---------------------------------------------------------------------------
+FONT_FAMILY = "Segoe UI"
+
+FONT_TITLE = (FONT_FAMILY, 17, "bold")
+FONT_SECTION = (FONT_FAMILY, 11, "bold")
+FONT_BODY = (FONT_FAMILY, 10)
+FONT_BODY_BOLD = (FONT_FAMILY, 10, "bold")
+FONT_SMALL = (FONT_FAMILY, 9)
+FONT_BIG_VALUE = (FONT_FAMILY, 13, "bold")
+TOOLTIP_FONT = (FONT_FAMILY, 9)
+
+COLORS = {
+    "bg_primary": "#f8f9fa",
+    "bg_secondary": "#ffffff",
+    "bg_canvas": "#0b5d3b",       # casino felt green
+    "bg_canvas_soft": "#0e6e46",
+    "accent": "#0d6efd",
+    "accent_hover": "#0a58ca",
+    "text_primary": "#212529",
+    "text_secondary": "#6c757d",
+    "text_on_felt": "#e9f5ee",
+    "success": "#198754",
+    "success_hover": "#146c43",
+    "warning": "#ffc107",
+    "danger": "#dc3545",
+    "danger_hover": "#b02a37",
+    "border": "#dee2e6",
+    "card_bg": "#ffffff",
+    "badge_bg": "#13301f",
 }
 
 ACTION_COLORS = {
-    "H": "green",
-    "S": "blue",
-    "D/H": "orange",
-    "D/S": "orange",
-    "P": "purple",
-    "-": "black",
-    "R/H": "red"
+    "H": "#2fbf71",      # hit - green
+    "S": "#4dabf7",      # stand - blue
+    "D/H": "#ffa94d",    # double - orange
+    "D/S": "#ffa94d",
+    "P": "#c084fc",      # split - purple
+    "P/H": "#c084fc",
+    "R/H": "#ff6b6b",    # surrender - red
+    "-": "#e9f5ee",
 }
 
-BASE_BET = 10
-DECK_COUNT = 8
-
-CARD_WIDTH = 73
-CARD_HEIGHT = 98
-CARD_SPACING = 40
-
-DEALER_AREA_LEFT = 1548
-DEALER_AREA_UPPER = 12
-DEALER_AREA_WIDTH, DEALER_AREA_HEIGHT = 1000, 800
-DEALER_AREA_RIGHT = DEALER_AREA_LEFT + DEALER_AREA_WIDTH
-DEALER_AREA_LOWER = DEALER_AREA_UPPER + DEALER_AREA_HEIGHT
+CARD_RENDER_SIZE = (60, 88)        # on-table card size in px
+DEALER_CARD_RENDER_SIZE = (84, 123)
+PICKER_CARD_SIZE = (56, 82)
 
 DEBUG_MODE = False
-PRODUCER_SLEEP = 0.9
-QUEUE_POLL_MS = 120
-RECOMMENDATION_DEBOUNCE_MS = 1200

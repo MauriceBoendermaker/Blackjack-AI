@@ -1,0 +1,11 @@
+numpy
+opencv-python
+pillow
+mss
+screeninfo
+requests
+roboflow
+
+# Optional: local inference instead of the Roboflow API.
+# Drop YOLO weights into models/player_cards.pt / models/dealer_cards.pt and:
+# ultralytics

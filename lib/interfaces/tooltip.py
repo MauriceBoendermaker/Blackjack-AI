@@ -9,8 +9,9 @@ class ToolTip:
         self.widget = widget
         self.text = text
         self.tipwindow = None
-        self.widget.bind("<Enter>", self.show_tip)
-        self.widget.bind("<Leave>", self.hide_tip)
+        # add="+" so other <Enter>/<Leave> handlers (hover colors) survive.
+        self.widget.bind("<Enter>", self.show_tip, add="+")
+        self.widget.bind("<Leave>", self.hide_tip, add="+")
 
     def show_tip(self, event=None):
         if self.tipwindow or not self.text:

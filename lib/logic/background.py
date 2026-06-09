@@ -1,50 +1,74 @@
-import time
-import queue
+"""Worker-thread lifecycle around the DetectionEngine.
+
+The GUI never blocks: start() returns immediately, model warm-up happens on
+the worker thread, and the GUI consumes engine snapshots by polling
+`engine.get_snapshot()` from a Tk `after()` loop.
+"""
+
 import threading
+import time
 
 from ..common import constants
-from .card_utils import get_card_utils
-from .blackjack import BlackjackLogic
+from .engine import DetectionEngine
 
-class BackgroundProcessor:
-    def __init__(self, update_ui_callback, gui):
-        self.gui = gui
-        self.update_ui_callback = update_ui_callback
-        self.update_queue = queue.Queue()
-        self.blackjack_logic = BlackjackLogic(gui)
-        self.card_utils = get_card_utils(gui)
+
+class DetectionController:
+    def __init__(self, log=print):
+        self.log = log
+        self.engine = DetectionEngine(log=log)
+        self._stop = threading.Event()
+        self._thread = None
+        self.state = "idle"  # idle | starting | running | stopped | error
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive() and not self._stop.is_set()
+
+    def set_monitor(self, monitor):
+        self.engine.set_monitor(monitor)
 
     def start(self):
-        threading.Thread(target=self.background_processing, daemon=True).start()
-        self.gui.after(constants.QUEUE_POLL_MS, self.check_for_updates)
+        if self.running:
+            return False
+        # Each worker gets its OWN stop event. A stopped-but-still-finishing
+        # old worker keeps watching its (already set) event, so a quick
+        # Stop -> Start can never revive it alongside the new one.
+        stop_event = threading.Event()
+        self._stop = stop_event
+        self.state = "starting"
+        self._thread = threading.Thread(target=self._run, args=(stop_event,),
+                                        daemon=True, name="detection")
+        self._thread.start()
+        return True
 
-    def background_processing(self):
-        while True:
-            detection_state = self.blackjack_logic.capture_screen_and_track_cards()
-            self.update_queue.put("update")
+    def stop(self):
+        self._stop.set()
+        self.state = "stopped"
 
-            # Adaptive sleep timing based on detection activity
-            if detection_state == "active_dealing":
-                sleep_time = 0.5  # Fast checks during card dealing
-            elif detection_state == "round_complete":
-                sleep_time = 1.0  # Medium checks when round is complete
-            else:  # "waiting"
-                sleep_time = 1.5  # Slower checks when waiting for new round
-
-            time.sleep(sleep_time)
-
-    def check_for_updates(self):
-        while not self.update_queue.empty():
-            data = self.update_queue.get_nowait()
-            if data == "update":
-                self.update_ui_callback()
-        self.gui.after(constants.QUEUE_POLL_MS, self.check_for_updates)
-
-    def update_gui_from_queue(self):
+    def _run(self, stop_event):
         try:
-            while not self.update_queue.empty():
-                data = self.update_queue.get_nowait()
-                if data == "update":
-                    self.update_ui_callback()
+            try:
+                self.log("Initializing detection models...")
+                self.engine.warm_up()
+                self.log(f"Models ready ({self.engine.provider.backend_name}).")
+            except Exception as e:
+                self.state = "error"
+                self.engine.last_error = str(e)
+                self.engine.publish_snapshot()
+                self.log(f"Model initialization failed: {e}")
+                return
+
+            self.state = "running"
+            while not stop_event.is_set():
+                activity = self.engine.run_cycle()
+                if activity == "dealing":
+                    sleep_s = constants.CYCLE_SLEEP_DEALING
+                elif activity == "complete":
+                    sleep_s = constants.CYCLE_SLEEP_COMPLETE
+                else:
+                    sleep_s = constants.CYCLE_SLEEP_WAITING
+                stop_event.wait(sleep_s)
+            self.state = "stopped"
         finally:
-            self.gui.after(constants.QUEUE_POLL_MS, self.update_gui_from_queue)
+            # Release this thread's GDI capture resources.
+            self.engine.capture.close_local()

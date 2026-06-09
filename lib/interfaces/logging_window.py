@@ -1,464 +1,238 @@
-"""
-Professional logging window with categorized output and search/filter capabilities
+"""Live log window with search, category filter, export, and auto-scroll.
+
+Thread-safety: LogManager invokes callbacks on whatever thread logged the
+message (usually the detection worker). The callback here only appends to a
+lock-guarded list; an `after()` loop on the Tk thread drains it. No Tkinter
+call ever happens off the main thread.
 """
 
+import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
-import os
+from tkinter import ttk, filedialog, messagebox
+
+from ..common import constants
+from ..logic.log_manager import LogCategory
+
+C = constants.COLORS
+
+MAX_DISPLAY_LINES = 2000
+
+CATEGORY_COLORS = {
+    "MODEL_LOADING": C["success"],
+    "CARD_COUNTER": C["accent"],
+    "DETECTION": C["text_primary"],
+    "PERFORMANCE": "#b8860b",
+    "ERROR": C["danger"],
+    "STARTUP": C["success"],
+    "UI": C["text_secondary"],
+    "GENERAL": C["text_secondary"],
+}
+
+FILTERS = ["All", "Errors only"] + [c.value for c in LogCategory]
 
 
 class LoggingWindow(tk.Toplevel):
-    """
-    Non-modal logging window for displaying categorized system logs
-    Features: search, filter, export, auto-scroll
-    """
-
     def __init__(self, parent, log_manager):
         super().__init__(parent)
         self.log_manager = log_manager
-        self.parent = parent
-
-        # Configuration
-        self.title("Blackjack AI - System Logs")
-        self.geometry("1200x700")
-        self.configure(bg='#f8f9fa')
-
-        # Non-modal - user can interact with both windows
-        # self.grab_set()  # Intentionally commented - we want non-modal
-
-        # Handle window close
+        self.title("Blackjack AI — Logs")
+        self.geometry("1100x650")
+        self.configure(bg=C["bg_primary"])
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # Color scheme matching modern_gui.py
-        self.colors = {
-            'bg_primary': '#f8f9fa',
-            'bg_secondary': '#ffffff',
-            'accent': '#0d6efd',
-            'success': '#198754',
-            'warning': '#ffc107',
-            'danger': '#dc3545',
-            'text_primary': '#212529',
-            'text_secondary': '#6c757d',
-            'border': '#dee2e6',
-        }
-
-        # Log category colors
-        self.log_colors = {
-            'MODEL_LOADING': self.colors['success'],
-            'CARD_COUNTER': self.colors['accent'],
-            'PERFORMANCE': self.colors['warning'],
-            'ERROR': self.colors['danger'],
-            'STARTUP': self.colors['success'],
-            'CACHE': self.colors['text_secondary'],
-            'UI_WARNING': self.colors['warning'],
-            'GENERAL': self.colors['text_primary'],
-        }
-
-        # UI state variables
         self.auto_scroll = tk.BooleanVar(value=True)
         self.search_var = tk.StringVar()
         self.filter_var = tk.StringVar(value="All")
+        self._search_job = None
+        self._shown_count = 0
 
-        # Pending logs for batched updates
-        self._pending_logs = []
-        self._update_scheduled = False
+        self._pending = []
+        self._pending_lock = threading.Lock()
 
-        # Build UI
-        self.build_header()
-        self.build_controls()
-        self.build_log_display()
+        self._build_controls()
+        self._build_display()
 
-        # Register callback with LogManager
-        if self.log_manager:
-            self.log_manager.register_callback(self.append_log)
+        # Register BEFORE loading history so nothing logged in between is
+        # lost; the first drain dedups entries that appear in both.
+        self.log_manager.register_callback(self._on_log)
+        loaded = self.log_manager.get_all_logs()
+        self._loaded_ids = {id(e) for e in loaded}
+        matching = [e for e in loaded if self._matches(e)]
+        if matching:
+            self._insert_entries(matching)
+        self.after(150, self._drain_pending)
 
-        # Load existing logs
-        self.after(100, self.load_existing_logs)
+    # ---------------------------------------------------------------- layout
 
-    def build_header(self):
-        """Build professional header"""
-        header_frame = tk.Frame(self, bg=self.colors['bg_secondary'], height=60)
-        header_frame.pack(fill=tk.X, side=tk.TOP)
-        header_frame.pack_propagate(False)
+    def _build_controls(self):
+        bar = tk.Frame(self, bg=C["bg_secondary"])
+        bar.pack(fill=tk.X, padx=14, pady=10)
 
-        title_label = tk.Label(header_frame, text="System Logs",
-                               font=('Inter', 16, 'bold'),
-                               bg=self.colors['bg_secondary'],
-                               fg=self.colors['text_primary'])
-        title_label.pack(pady=18)
+        tk.Label(bar, text="Search:", font=constants.FONT_BODY,
+                 bg=C["bg_secondary"], fg=C["text_primary"]).pack(side=tk.LEFT)
+        entry = tk.Entry(bar, textvariable=self.search_var, font=constants.FONT_BODY, width=28)
+        entry.pack(side=tk.LEFT, padx=(6, 18))
+        self.search_var.trace_add("write", lambda *a: self._debounced_refresh())
 
-    def build_controls(self):
-        """Build control panel with search, filter, and action buttons"""
-        control_frame = tk.Frame(self, bg=self.colors['bg_secondary'], height=100)
-        control_frame.pack(fill=tk.X, padx=20, pady=10)
-        control_frame.pack_propagate(False)
+        tk.Label(bar, text="Filter:", font=constants.FONT_BODY,
+                 bg=C["bg_secondary"], fg=C["text_primary"]).pack(side=tk.LEFT)
+        combo = ttk.Combobox(bar, textvariable=self.filter_var, state="readonly",
+                             font=constants.FONT_BODY, width=18, values=FILTERS)
+        combo.pack(side=tk.LEFT, padx=(6, 18))
+        combo.bind("<<ComboboxSelected>>", lambda e: self._refresh())
 
-        # First row: Search and Filter
-        row1 = tk.Frame(control_frame, bg=self.colors['bg_secondary'])
-        row1.pack(fill=tk.X, pady=(0, 8))
+        tk.Checkbutton(bar, text="Auto-scroll", variable=self.auto_scroll,
+                       font=constants.FONT_BODY, bg=C["bg_secondary"],
+                       activebackground=C["bg_secondary"]).pack(side=tk.LEFT)
 
-        # Search
-        search_label = tk.Label(row1, text="🔍 Search:",
-                               font=('Inter', 10),
-                               bg=self.colors['bg_secondary'],
-                               fg=self.colors['text_primary'])
-        search_label.pack(side=tk.LEFT, padx=(0, 8))
+        self.count_label = tk.Label(bar, text="", font=constants.FONT_BODY,
+                                    bg=C["bg_secondary"], fg=C["text_secondary"])
+        self.count_label.pack(side=tk.RIGHT)
 
-        search_entry = tk.Entry(row1, textvariable=self.search_var,
-                               font=('Inter', 10),
-                               width=30)
-        search_entry.pack(side=tk.LEFT, padx=(0, 20))
+        tk.Button(bar, text="Export", command=self._export, bg=C["accent"], fg="white",
+                  font=constants.FONT_BODY, relief="flat", cursor="hand2",
+                  padx=14, pady=5).pack(side=tk.RIGHT, padx=8)
+        tk.Button(bar, text="Clear", command=self._clear, bg=C["warning"],
+                  fg=C["text_primary"], font=constants.FONT_BODY, relief="flat",
+                  cursor="hand2", padx=14, pady=5).pack(side=tk.RIGHT)
 
-        # Bind search to filter
-        self.search_var.trace_add('write', lambda *args: self.filter_logs())
-
-        # Category filter
-        filter_label = tk.Label(row1, text="📁 Filter:",
-                               font=('Inter', 10),
-                               bg=self.colors['bg_secondary'],
-                               fg=self.colors['text_primary'])
-        filter_label.pack(side=tk.LEFT, padx=(0, 8))
-
-        filter_combo = ttk.Combobox(row1, textvariable=self.filter_var,
-                                    state="readonly",
-                                    font=('Inter', 10),
-                                    width=20)
-        filter_combo['values'] = [
-            "All",
-            "Performance Warnings",
-            "Card Counter Updates",
-            "Model Loading",
-            "Errors Only",
-            "Startup",
-            "Cache Operations"
-        ]
-        filter_combo.pack(side=tk.LEFT)
-        filter_combo.bind("<<ComboboxSelected>>", lambda e: self.filter_logs())
-
-        # Second row: Buttons and Auto-scroll
-        row2 = tk.Frame(control_frame, bg=self.colors['bg_secondary'])
-        row2.pack(fill=tk.X)
-
-        # Clear button
-        clear_btn = tk.Button(row2, text="Clear Logs",
-                             command=self.clear_logs,
-                             bg=self.colors['warning'],
-                             fg=self.colors['text_primary'],
-                             font=('Inter', 10),
-                             relief='flat',
-                             cursor='hand2',
-                             padx=15, pady=8)
-        clear_btn.pack(side=tk.LEFT, padx=(0, 10))
-
-        # Export button
-        export_btn = tk.Button(row2, text="Export to File",
-                              command=self.export_logs,
-                              bg=self.colors['accent'],
-                              fg='white',
-                              font=('Inter', 10),
-                              relief='flat',
-                              cursor='hand2',
-                              padx=15, pady=8)
-        export_btn.pack(side=tk.LEFT, padx=(0, 20))
-
-        # Auto-scroll checkbox
-        auto_scroll_check = tk.Checkbutton(row2, text="Auto-scroll to latest",
-                                          variable=self.auto_scroll,
-                                          font=('Inter', 10),
-                                          bg=self.colors['bg_secondary'],
-                                          fg=self.colors['text_primary'],
-                                          selectcolor=self.colors['bg_primary'],
-                                          activebackground=self.colors['bg_secondary'])
-        auto_scroll_check.pack(side=tk.LEFT)
-
-        # Log count label
-        self.count_label = tk.Label(row2, text="Logs: 0",
-                                   font=('Inter', 10),
-                                   bg=self.colors['bg_secondary'],
-                                   fg=self.colors['text_secondary'])
-        self.count_label.pack(side=tk.RIGHT, padx=10)
-
-    def build_log_display(self):
-        """Build scrollable log display area"""
-        display_frame = tk.Frame(self, bg=self.colors['bg_primary'])
-        display_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
-
-        # Create Text widget with scrollbar
-        scrollbar = tk.Scrollbar(display_frame)
+    def _build_display(self):
+        frame = tk.Frame(self, bg=C["bg_primary"])
+        frame.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
+        scrollbar = tk.Scrollbar(frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.text = tk.Text(frame, wrap=tk.WORD, font=("Consolas", 9),
+                            bg=C["bg_secondary"], fg=C["text_primary"],
+                            yscrollcommand=scrollbar.set, state="disabled",
+                            relief="flat", highlightbackground=C["border"],
+                            highlightthickness=1)
+        self.text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.text.yview)
+        for name, color in CATEGORY_COLORS.items():
+            self.text.tag_config(f"cat_{name}", foreground=color)
+        self.text.bind("<MouseWheel>", self._on_manual_scroll)
 
-        self.text_widget = tk.Text(display_frame,
-                                   wrap=tk.WORD,
-                                   font=('Consolas', 9),
-                                   bg=self.colors['bg_secondary'],
-                                   fg=self.colors['text_primary'],
-                                   yscrollcommand=scrollbar.set,
-                                   state='disabled',
-                                   relief='flat',
-                                   borderwidth=1,
-                                   highlightbackground=self.colors['border'],
-                                   highlightthickness=1)
-        self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    # ----------------------------------------------------------------- logic
 
-        scrollbar.config(command=self.text_widget.yview)
+    def _on_log(self, entry):
+        """LogManager callback — may run on any thread. No Tk calls here."""
+        with self._pending_lock:
+            self._pending.append(entry)
 
-        # Configure color tags for each category
-        for category_name, color in self.log_colors.items():
-            self.text_widget.tag_config(f"category_{category_name}",
-                                       foreground=color,
-                                       font=('Consolas', 9))
+    def _drain_pending(self):
+        if not self.winfo_exists():
+            return
+        try:
+            with self._pending_lock:
+                entries, self._pending = self._pending, []
+            if self._loaded_ids:
+                entries = [e for e in entries if id(e) not in self._loaded_ids]
+                self._loaded_ids = set()
+            if entries:
+                shown = [e for e in entries if self._matches(e)]
+                if shown:
+                    self._insert_entries(shown)
+        except Exception:
+            pass  # never let one bad batch kill the drain loop
+        self.after(150, self._drain_pending)
 
-        # Highlight tag for search results
-        self.text_widget.tag_config("highlight",
-                                   background='#ffeb3b',
-                                   foreground=self.colors['text_primary'])
+    def _insert_entries(self, entries):
+        self.text.config(state="normal")
+        for entry in entries:
+            self.text.insert(tk.END, self._format(entry), f"cat_{entry.category.name}")
+        self._shown_count += len(entries)
+        # Trim the widget so long sessions don't degrade. index("end-1c")
+        # counts one extra (empty) line after the trailing newline.
+        shown_lines = int(self.text.index("end-1c").split(".")[0]) - 1
+        if shown_lines > MAX_DISPLAY_LINES:
+            self.text.delete("1.0", f"{shown_lines - MAX_DISPLAY_LINES + 1}.0")
+            self._shown_count = MAX_DISPLAY_LINES
+        self.text.config(state="disabled")
+        if self.auto_scroll.get():
+            self.text.see(tk.END)
+        self._update_count()
 
-        # Detect manual scrolling to disable auto-scroll
-        self.text_widget.bind('<MouseWheel>', self._on_manual_scroll)
-        self.text_widget.bind('<Button-4>', self._on_manual_scroll)
-        self.text_widget.bind('<Button-5>', self._on_manual_scroll)
+    @staticmethod
+    def _format(entry):
+        return f"[{entry.timestamp.strftime('%H:%M:%S')}] [{entry.category.value:13}] {entry.message}\n"
 
-    def _on_manual_scroll(self, event):
-        """Disable auto-scroll when user manually scrolls"""
-        # Check if scrolled away from bottom
-        if self.text_widget.yview()[1] < 0.99:
+    def _matches(self, entry):
+        needle = self.search_var.get().lower()
+        if needle and needle not in entry.message.lower():
+            return False
+        chosen = self.filter_var.get()
+        if chosen == "All":
+            return True
+        if chosen == "Errors only":
+            return entry.level == "ERROR"
+        return entry.category.value == chosen
+
+    def _debounced_refresh(self):
+        if self._search_job is not None:
+            self.after_cancel(self._search_job)
+        self._search_job = self.after(250, self._refresh)
+
+    def _refresh(self):
+        self._search_job = None
+        if not self.winfo_exists():
+            return
+        self.text.config(state="normal")
+        self.text.delete("1.0", tk.END)
+        self.text.config(state="disabled")
+        self._shown_count = 0
+        matching = [e for e in self.log_manager.get_all_logs() if self._matches(e)]
+        if matching:
+            self._insert_entries(matching)
+        else:
+            self._update_count()
+
+    def _update_count(self):
+        total = len(self.log_manager.get_all_logs())
+        self.count_label.config(text=f"Showing {self._shown_count} of {total}")
+
+    def _clear(self):
+        if messagebox.askyesno("Clear logs", "Clear the log history? This cannot be undone.",
+                               parent=self):
+            self.log_manager.clear_logs()
+            self._refresh()
+
+    def _export(self):
+        try:
+            constants.LOGS_DIR.mkdir(exist_ok=True)
+        except OSError:
+            pass  # the save dialog will fall back to a default directory
+        default = f"blackjack_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Export logs", initialdir=constants.LOGS_DIR,
+            initialfile=default, defaultextension=".log",
+            filetypes=[("Log files", "*.log"), ("Text files", "*.txt")])
+        if not path:
+            return
+        entries = self.log_manager.get_all_logs()
+        try:
+            with open(path, "w", encoding="utf-8", errors="replace") as f:
+                f.write(f"Blackjack AI logs — exported {datetime.now():%Y-%m-%d %H:%M:%S}\n")
+                f.write("=" * 80 + "\n")
+                for e in entries:
+                    f.write(f"[{e.timestamp:%Y-%m-%d %H:%M:%S}] [{e.level:7}] "
+                            f"[{e.category.value:13}] {e.message}\n")
+            messagebox.showinfo("Export", f"Exported {len(entries)} entries to:\n{path}", parent=self)
+        except OSError as e:
+            messagebox.showerror("Export failed", str(e), parent=self)
+
+    def _on_manual_scroll(self, _event):
+        self.after_idle(self._sync_autoscroll)
+
+    def _sync_autoscroll(self):
+        if not self.winfo_exists():
+            return
+        at_bottom = self.text.yview()[1] >= 0.99
+        if at_bottom and not self.auto_scroll.get():
+            self.auto_scroll.set(True)
+        elif not at_bottom and self.auto_scroll.get():
             self.auto_scroll.set(False)
 
-    def append_log(self, log_entry):
-        """
-        Add a new log entry (called by LogManager callback)
-        Uses batching to prevent UI freeze
-        """
-        # Check if window still exists before scheduling updates
-        if not self.winfo_exists():
-            return
-
-        self._pending_logs.append(log_entry)
-
-        # Schedule batch processing
-        if not self._update_scheduled:
-            self._update_scheduled = True
-            try:
-                self.after(100, self._process_pending_logs)
-            except tk.TclError:
-                # Window was destroyed - ignore
-                self._update_scheduled = False
-
-    def _process_pending_logs(self):
-        """Process batched log updates"""
-        # Check if window still exists before processing
-        if not self.winfo_exists():
-            self._update_scheduled = False
-            self._pending_logs.clear()
-            return
-
-        if not self._pending_logs:
-            self._update_scheduled = False
-            return
-
-        try:
-            self.text_widget.config(state='normal')
-
-            for entry in self._pending_logs:
-                # Apply filters
-                if not self._matches_filters(entry):
-                    continue
-
-                # Format log entry
-                timestamp_str = entry.timestamp.strftime("%H:%M:%S")
-                category_str = f"[{entry.category.value:15}]"
-                formatted = f"[{timestamp_str}] {category_str} {entry.message}\n"
-
-                # Insert with color tag
-                tag_name = f"category_{entry.category.name}"
-                self.text_widget.insert(tk.END, formatted, tag_name)
-
-            self.text_widget.config(state='disabled')
-
-            # Auto-scroll to bottom if enabled
-            if self.auto_scroll.get():
-                self.text_widget.see(tk.END)
-
-            # Update count
-            self._update_count_label()
-
-        except tk.TclError:
-            # Window was destroyed while processing - ignore
-            pass
-        finally:
-            self._pending_logs.clear()
-            self._update_scheduled = False
-
-    def _matches_filters(self, entry):
-        """Check if log entry matches current search and filter criteria"""
-        # Search filter
-        search_text = self.search_var.get().lower()
-        if search_text and search_text not in entry.message.lower():
-            return False
-
-        # Category filter
-        filter_value = self.filter_var.get()
-        if filter_value == "All":
-            return True
-        elif filter_value == "Performance Warnings" and entry.category.name != "PERFORMANCE":
-            return False
-        elif filter_value == "Card Counter Updates" and entry.category.name != "CARD_COUNTER":
-            return False
-        elif filter_value == "Model Loading" and entry.category.name != "MODEL_LOADING":
-            return False
-        elif filter_value == "Errors Only" and entry.level != "ERROR":
-            return False
-        elif filter_value == "Startup" and entry.category.name != "STARTUP":
-            return False
-        elif filter_value == "Cache Operations" and entry.category.name != "CACHE":
-            return False
-
-        return True
-
-    def filter_logs(self):
-        """Re-display logs with current filter settings"""
-        if not self.log_manager or not self.winfo_exists():
-            return
-
-        try:
-            # Clear display
-            self.text_widget.config(state='normal')
-            self.text_widget.delete('1.0', tk.END)
-
-            # Re-add all logs that match filters
-            all_logs = self.log_manager.get_all_logs()
-            for entry in all_logs:
-                if self._matches_filters(entry):
-                    timestamp_str = entry.timestamp.strftime("%H:%M:%S")
-                    category_str = f"[{entry.category.value:15}]"
-                    formatted = f"[{timestamp_str}] {category_str} {entry.message}\n"
-
-                    tag_name = f"category_{entry.category.name}"
-                    self.text_widget.insert(tk.END, formatted, tag_name)
-
-            self.text_widget.config(state='disabled')
-
-            # Auto-scroll to bottom
-            if self.auto_scroll.get():
-                self.text_widget.see(tk.END)
-
-            # Update count
-            self._update_count_label()
-
-        except tk.TclError:
-            # Window was destroyed - ignore
-            pass
-
-    def clear_logs(self):
-        """Clear all logs from display and manager"""
-        if messagebox.askyesno("Confirm Clear", "Clear all logs? This cannot be undone."):
-            if self.log_manager:
-                self.log_manager.clear_logs()
-
-            self.text_widget.config(state='normal')
-            self.text_widget.delete('1.0', tk.END)
-            self.text_widget.config(state='disabled')
-
-            self._update_count_label()
-
-    def export_logs(self):
-        """Export logs to a text file"""
-        if not self.log_manager:
-            return
-
-        # Create logs directory if it doesn't exist
-        logs_dir = "logs"
-        os.makedirs(logs_dir, exist_ok=True)
-
-        # Default filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_filename = f"blackjack_{timestamp}.log"
-        default_path = os.path.join(logs_dir, default_filename)
-
-        # Ask user for save location
-        filepath = filedialog.asksaveasfilename(
-            title="Export Logs",
-            initialdir=logs_dir,
-            initialfile=default_filename,
-            defaultextension=".log",
-            filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")]
-        )
-
-        if not filepath:
-            return  # User cancelled
-
-        try:
-            # Get all logs
-            all_logs = self.log_manager.get_all_logs()
-
-            with open(filepath, 'w', encoding='utf-8', errors='replace') as f:
-                f.write(f"Blackjack AI - System Logs Export\n")
-                f.write(f"Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Total Logs: {len(all_logs)}\n")
-                f.write("=" * 80 + "\n\n")
-
-                for entry in all_logs:
-                    timestamp_str = entry.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-                    f.write(f"[{timestamp_str}] [{entry.level:7}] [{entry.category.value:15}] {entry.message}\n")
-
-            messagebox.showinfo("Export Successful",
-                              f"Logs exported to:\n{filepath}\n\nTotal entries: {len(all_logs)}")
-
-        except Exception as e:
-            messagebox.showerror("Export Failed", f"Failed to export logs:\n{e}")
-
-    def load_existing_logs(self):
-        """Load and display all existing logs from LogManager"""
-        if not self.log_manager or not self.winfo_exists():
-            return
-
-        try:
-            all_logs = self.log_manager.get_all_logs()
-
-            self.text_widget.config(state='normal')
-
-            for entry in all_logs:
-                if self._matches_filters(entry):
-                    timestamp_str = entry.timestamp.strftime("%H:%M:%S")
-                    category_str = f"[{entry.category.value:15}]"
-                    formatted = f"[{timestamp_str}] {category_str} {entry.message}\n"
-
-                    tag_name = f"category_{entry.category.name}"
-                    self.text_widget.insert(tk.END, formatted, tag_name)
-
-            self.text_widget.config(state='disabled')
-
-            # Scroll to bottom
-            if self.auto_scroll.get():
-                self.text_widget.see(tk.END)
-
-            # Update count
-            self._update_count_label()
-
-        except tk.TclError:
-            # Window was destroyed - ignore
-            pass
-
-    def _update_count_label(self):
-        """Update the log count label"""
-        if not self.winfo_exists():
-            return
-
-        try:
-            # Count visible lines
-            content = self.text_widget.get('1.0', tk.END)
-            line_count = content.count('\n') - 1  # Subtract 1 for trailing newline
-            self.count_label.config(text=f"Logs: {line_count}")
-        except tk.TclError:
-            # Window was destroyed - ignore
-            pass
-
     def on_close(self):
-        """Handle window close event"""
-        # Unregister callback
-        if self.log_manager:
-            self.log_manager.unregister_callback(self.append_log)
-
-        # Destroy window
+        self.log_manager.unregister_callback(self._on_log)
         self.destroy()
