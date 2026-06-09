@@ -29,12 +29,26 @@ class CardCounter:
         self.running_count = 0
         self.cards_seen = 0
         self.per_rank = {k: 0 for k in COUNTER_KEYS}
+        # Suit-level refinements of per_rank (Feature 4). Player detections
+        # carry full names ("8 of Diamonds") -> suit_seen; dealer detections
+        # carry only a rank ("King") -> rank_seen_nosuit; manual +/- stays at
+        # the 10-bucket level and lives only in per_rank.
+        self.suit_seen = {}        # "8 of Diamonds" -> count
+        self.rank_seen_nosuit = {} # "King" -> count
+
+    def _track_identity(self, card_name: str, delta: int):
+        if " of " in card_name:
+            store, key = self.suit_seen, card_name
+        else:
+            store, key = self.rank_seen_nosuit, cards.rank_of(card_name)
+        store[key] = max(0, store.get(key, 0) + delta)
 
     def count_card(self, card_name: str):
         with self._lock:
             self.running_count += cards.hilo_delta(card_name)
             self.cards_seen += 1
             self.per_rank[counter_key(card_name)] += 1
+            self._track_identity(card_name, +1)
 
     def uncount_card(self, card_name: str):
         """Retract a previously counted card (manual correction of a misread)."""
@@ -43,6 +57,7 @@ class CardCounter:
             self.cards_seen = max(0, self.cards_seen - 1)
             key = counter_key(card_name)
             self.per_rank[key] = max(0, self.per_rank[key] - 1)
+            self._track_identity(card_name, -1)
 
     def adjust_manual(self, rank_key: str, delta: int):
         """Manual +/- from the UI; keeps running count and shoe totals consistent."""
@@ -61,6 +76,8 @@ class CardCounter:
             self.running_count = 0
             self.cards_seen = 0
             self.per_rank = {k: 0 for k in COUNTER_KEYS}
+            self.suit_seen = {}
+            self.rank_seen_nosuit = {}
 
     @property
     def decks_remaining(self) -> float:
@@ -80,4 +97,6 @@ class CardCounter:
                 "decks_remaining": decks,
                 "cards_seen": self.cards_seen,
                 "per_rank": dict(self.per_rank),
+                "suit_seen": dict(self.suit_seen),
+                "rank_seen_nosuit": dict(self.rank_seen_nosuit),
             }

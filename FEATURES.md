@@ -131,7 +131,16 @@ dominates every published human counting system.
 **Effort:** ~3–4 days for the engines + panel; paytables user-configurable (they swing
 house edge wildly between variants).
 
-## 4. True 52-card shoe model (un-fold tens, track suits)
+## 4. ✅ DONE — True 52-card shoe model (un-fold tens, track suits)
+
+> **Shipped 2026-06-09.** `CardCounter` now tracks card identity at three
+> levels (exact rank+suit from player detections, rank-only from the dealer
+> model, bucket-only from manual ±), and `lib/logic/shoe.py` builds the
+> expected 52-cell (rank × suit) remaining composition: exact removals hit
+> their cell, rank-only spread 1/4 per suit, bucket residual spreads
+> uniformly. The dealer-suit YOLO extension remains optional future work —
+> the expected-composition treatment quantifies away most of the error.
+> Tests: `tests/test_shoe.py` (9 cases incl. mixed-level buckets).
 
 **What:** Internally track the shoe as a 52-cell (rank × suit) vector instead of 10
 buckets. Keep the UI fold (J/Q/K → "10") if desired. Extend dealer detection to suits.
