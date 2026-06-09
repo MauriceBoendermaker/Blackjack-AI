@@ -463,6 +463,18 @@ class DetectionEngine:
         self.counter.adjust_manual(rank_key, delta)
         self.publish_snapshot()
 
+    def refresh_settings(self):
+        """Re-read runtime settings (rules, deck count, side bets) and drop
+        advice caches keyed on the old config. Called after the settings
+        dialog saves."""
+        with self._lock:
+            self.counter.deck_count = constants.DECK_COUNT
+        with self._advice_lock:
+            self._advice_cache.clear()
+            self._sidebet_result = ([], None)
+        self.log("Settings applied — table rules and paytables refreshed.")
+        self.publish_snapshot()
+
     # ------------------------------------------------------------- snapshot
 
     def _optimal_advice(self, names, dealer_rank, per_rank, csv_action):

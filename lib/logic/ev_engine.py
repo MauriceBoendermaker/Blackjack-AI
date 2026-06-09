@@ -56,6 +56,13 @@ class Rules:
 DEFAULT_RULES = Rules(**constants.RULES)
 
 
+def current_rules() -> Rules:
+    """Rules as configured right now (constants.RULES is runtime-mutable via
+    the settings dialog). Rules is a frozen dataclass hashed by value, so
+    lru-cached evaluations key correctly across settings changes."""
+    return Rules(**constants.RULES)
+
+
 # ------------------------------------------------------------- composition
 
 def full_shoe(deck_count: int = constants.DECK_COUNT) -> tuple:
@@ -309,14 +316,18 @@ def insurance_ev(comp: tuple) -> tuple:
     return p, 3.0 * p - 1.0
 
 
-def insurance_advice(per_rank: dict, deck_count: int = constants.DECK_COUNT,
-                     rules: Rules = DEFAULT_RULES) -> dict:
+def insurance_advice(per_rank: dict, deck_count: int | None = None,
+                     rules: Rules | None = None) -> dict:
     """The exact insurance / even-money call from the live shoe composition.
 
     Insurance is a solved decision: take iff the unseen tens fraction exceeds
     1/3 (regardless of the player's hand). Even money on a blackjack is the
     same bet in disguise — its edge over declining is 1 - bj_pays * (1 - p),
     which for 3:2 tables goes positive at exactly the same p > 1/3."""
+    if deck_count is None:
+        deck_count = constants.DECK_COUNT
+    if rules is None:
+        rules = current_rules()
     p, ev = insurance_ev(comp_from_per_rank(per_rank, deck_count))
     return {
         "take": ev > 0,
@@ -383,9 +394,13 @@ def evaluate(hand: tuple, up_idx: int, comp: tuple, rules: Rules = DEFAULT_RULES
 
 
 def advise(player_cards, dealer_rank, per_rank: dict,
-           deck_count: int = constants.DECK_COUNT, rules: Rules = DEFAULT_RULES):
+           deck_count: int | None = None, rules: Rules | None = None):
     """Card names + CardCounter per-rank totals -> evaluate() result, or None
     when no decision applies (too few cards, bust/21, unknown dealer card)."""
+    if deck_count is None:
+        deck_count = constants.DECK_COUNT
+    if rules is None:
+        rules = current_rules()
     hand = [c for c in player_cards if c and c != "-"]
     if len(hand) < 2 or not dealer_rank:
         return None

@@ -150,6 +150,9 @@ class ModernBlackjackGUI(tk.Tk):
         self.regions_btn.config(state="disabled")
         self._button(section, "🗒  View Logs", self._open_logs, C["text_secondary"],
                      tooltip="Open the live log window").pack(fill=tk.X, pady=4)
+        self._button(section, "⚙  Settings", self._open_settings, C["text_secondary"],
+                     tooltip="Table rules, deck count, side-bet paytables"
+                     ).pack(fill=tk.X, pady=4)
 
     def _build_counters_section(self, parent):
         section = self._section(parent, "Cards Seen (this shoe)")
@@ -187,14 +190,14 @@ class ModernBlackjackGUI(tk.Tk):
             self.info_vars[key] = var
 
     def _build_sidebets_section(self, parent):
-        """Live pre-deal EV per enabled side bet; green when the bet is +EV."""
+        """Live pre-deal EV per enabled side bet; green when the bet is +EV.
+        Rows exist for every known bet and show/hide with the settings."""
         section = self._section(parent, "Side Bets (EV per unit)")
         self.sidebet_rows = {}
         for key, cfg in constants.SIDE_BETS.items():
-            if not cfg.get("enabled"):
-                continue
             row = tk.Frame(section, bg=C["bg_secondary"])
-            row.pack(fill=tk.X, pady=2)
+            if cfg.get("enabled"):
+                row.pack(fill=tk.X, pady=2)
             tk.Label(row, text=cfg.get("label", key), font=constants.FONT_BODY,
                      width=14, anchor="w", bg=C["bg_secondary"],
                      fg=C["text_secondary"]).pack(side=tk.LEFT)
@@ -202,7 +205,7 @@ class ModernBlackjackGUI(tk.Tk):
             lbl = tk.Label(row, textvariable=var, font=constants.FONT_BODY_BOLD,
                            anchor="w", bg=C["bg_secondary"], fg=C["text_primary"])
             lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
-            self.sidebet_rows[key] = (var, lbl)
+            self.sidebet_rows[key] = (row, var, lbl)
 
     # ------------------------------------------------------------ table/status
 
@@ -377,11 +380,14 @@ class ModernBlackjackGUI(tk.Tk):
         self.info_vars["seen"].set(str(count["cards_seen"]))
         self.info_vars["bet"].set(snap["bet"])
 
-        for item in snap.get("side_bets", []):
-            row = self.sidebet_rows.get(item["key"])
-            if row is None:
+        live = {item["key"]: item for item in snap.get("side_bets", [])}
+        for key, (row, var, lbl) in self.sidebet_rows.items():
+            item = live.get(key)
+            if item is None:
+                row.pack_forget()
                 continue
-            var, lbl = row
+            if not row.winfo_ismapped():
+                row.pack(fill=tk.X, pady=2)
             ev = item["ev"]
             if ev is None:
                 var.set("—")
@@ -407,6 +413,10 @@ class ModernBlackjackGUI(tk.Tk):
                 f" · inference {m['inference_ms']:.0f} ms{skipped}")
         elif not self.controller.running:
             self.metrics_var.set("")
+
+    def _open_settings(self):
+        from .settings_dialog import SettingsDialog
+        SettingsDialog(self, on_apply=self.controller.engine.refresh_settings)
 
     def _on_close(self):
         self.controller.stop()

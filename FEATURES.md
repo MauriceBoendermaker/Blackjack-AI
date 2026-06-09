@@ -242,7 +242,15 @@ Closing the loop (advice → outcome) is what turns the app from a toy into a to
 
 **Effort:** ~2–3 days.
 
-## 9. Table rules & paytable profiles + settings UI
+## 9. ✅ DONE — Table rules & paytable profiles + settings UI
+
+> **Shipped 2026-06-09.** `lib/common/settings.py` persists the table profile
+> to `output/settings.json` (loaded at startup); the ⚙ Settings dialog edits
+> S17/H17, peek/ENHC, dealer-BJ handling, DAS, double restrictions, surrender,
+> BJ payout, deck count, base bet, and per-bet side-bet availability. Saving
+> applies live: the EV engine reads rules at call time, the engine drops its
+> advice caches (`refresh_settings`), and side-bet rows show/hide at runtime.
+> Tests: `tests/test_settings.py` incl. rules-change → EV-engine pickup.
 
 **What:** A settings dialog and per-table profiles (JSON in `output/profiles/`):
 S17/H17, peek vs ENHC, DAS, resplit limits, BJ pays 3:2 / 6:5, surrender, deck count,

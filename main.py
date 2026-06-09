@@ -3,7 +3,7 @@
 Run with:  python main.py
 """
 
-from lib.common import constants
+from lib.common import constants, settings
 from lib.logic.log_manager import LogManager, install_redirectors
 
 
@@ -13,6 +13,8 @@ def main():
     install_redirectors(log_manager)
 
     print(f"Starting {constants.TITLE}")
+    if settings.load_and_apply():
+        print("Loaded table profile from output/settings.json.")
 
     # Imported after logging is live; the GUI starts instantly because the
     # detection models are only initialized when detection is started.
