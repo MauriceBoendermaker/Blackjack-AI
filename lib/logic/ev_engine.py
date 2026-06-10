@@ -127,6 +127,13 @@ def hand_state(indices) -> tuple:
 _DEALER_CACHE = {}
 _DEALER_CACHE_LIMIT = 600_000
 
+# Shared player-tree memo (V2 Feature 9). All seats at a table face the SAME
+# composition and up-card, so their hit-recursion subtrees overlap heavily —
+# keying the memo module-wide (instead of per evaluate() call) lets seat 2
+# reuse everything seat 1 explored. Cleared only at evaluation boundaries.
+_PLAYER_MEMO = {}
+_PLAYER_MEMO_LIMIT = 400_000
+
 
 def _dealer_final(comp: tuple, total: int, soft: bool, s17: bool) -> tuple:
     """P(final total = 17/18/19/20/21/bust) for a dealer who keeps drawing."""
@@ -199,7 +206,7 @@ class _Evaluator:
         self.up = up_idx
         self.rules = rules
         self.excl = TEN if up_idx == ACE else (ACE if up_idx == TEN else None)
-        self._best_memo = {}
+        self._memo_prefix = (up_idx, rules)
 
     def draw_probs(self, comp: tuple):
         n = sum(comp)
@@ -232,13 +239,13 @@ class _Evaluator:
         return ev
 
     def ev_best(self, total: int, soft: bool, comp: tuple) -> float:
-        """EV of optimal stand/hit play from this state."""
-        key = (total, soft, comp)
-        cached = self._best_memo.get(key)
+        """EV of optimal stand/hit play from this state (module-shared memo)."""
+        key = (self._memo_prefix, total, soft, comp)
+        cached = _PLAYER_MEMO.get(key)
         if cached is not None:
             return cached
         ev = max(self.ev_stand(total, comp), self.ev_hit(total, soft, comp))
-        self._best_memo[key] = ev
+        _PLAYER_MEMO[key] = ev
         return ev
 
     def ev_hit(self, total: int, soft: bool, comp: tuple) -> float:
@@ -350,6 +357,8 @@ def evaluate(hand: tuple, up_idx: int, comp: tuple, rules: Rules = DEFAULT_RULES
     and may double only under DAS."""
     if len(_DEALER_CACHE) > _DEALER_CACHE_LIMIT:
         _DEALER_CACHE.clear()  # boundary clear: never evicts mid-recursion
+    if len(_PLAYER_MEMO) > _PLAYER_MEMO_LIMIT:
+        _PLAYER_MEMO.clear()
     ev = _Evaluator(up_idx, rules)
     evs, p_bj = _action_evs(ev, hand, comp, rules, post_split)
     best = max(evs, key=evs.get)
@@ -420,6 +429,8 @@ def predeal_ev(comp: tuple, rules: Rules) -> float:
         return 0.0
     if len(_DEALER_CACHE) > _DEALER_CACHE_LIMIT:
         _DEALER_CACHE.clear()
+    if len(_PLAYER_MEMO) > _PLAYER_MEMO_LIMIT:
+        _PLAYER_MEMO.clear()
     total_ev = 0.0
     for u in range(10):
         if not comp[u]:
@@ -459,6 +470,8 @@ def predeal_ev(comp: tuple, rules: Rules) -> float:
                 total_ev += p_u * weight * ev_hand
     if len(_DEALER_CACHE) > _DEALER_CACHE_LIMIT:
         _DEALER_CACHE.clear()  # the sweep inflates it well past the limit
+    if len(_PLAYER_MEMO) > _PLAYER_MEMO_LIMIT:
+        _PLAYER_MEMO.clear()
     return total_ev
 
 

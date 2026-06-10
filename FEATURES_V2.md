@@ -270,7 +270,16 @@ only quality variable is the seated player's discipline. v1's hint says
 
 **Effort:** ~1–2 days on top of Feature 1.
 
-## 9. EV-core speed: compile or sidecar the engine
+## 9. ✅ DONE (algorithmic tier) — EV-core speed: compile or sidecar the engine
+
+> **Shipped 2026-06-10.** The module-shared player-tree memo lets every seat
+> reuse the subtrees other seats explored against the same composition
+> (5-seat ace table: 2.2 s → 1.36 s cold, goldens unchanged), and the engine
+> now warms the memos for the locked up-card on the advice thread before the
+> first player hit arrives. Caches clear only at evaluation boundaries.
+> The compile tiers (mypyc ≈2-5×, PyPy sidecar ≈3×, numba array-rewrite)
+> remain documented options if more speed is ever needed — they require a
+> build toolchain, so they're deliberately not installed here.
 
 **What:** Cut the ace-up worst case from ~2 s toward ~0.2–0.5 s and make the
 pre-deal sweep (Feature 3) comfortable.

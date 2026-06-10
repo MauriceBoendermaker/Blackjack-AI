@@ -323,6 +323,18 @@ class DetectionEngine:
             self.counter.count_card(rank)
             self._dealer_counted = True
             self.log(f"Dealer up-card: {rank}" + (" (manual)" if manual else " (locked)"))
+            # Warm the shared EV memos for this up-card before player hits
+            # arrive — a deep dummy hand explores the subtrees the real seat
+            # evaluations will need for the same composition.
+            per_rank = dict(self.counter.per_rank)
+            self._advice_pool.submit(self._warm_advice_job, rank, per_rank)
+
+    def _warm_advice_job(self, dealer_rank, per_rank):
+        try:
+            ev_engine.advise(["2 of Hearts", "3 of Clubs"], dealer_rank, per_rank,
+                             self.counter.deck_count)
+        except Exception:
+            pass
 
     # --------------------------------------------------------------- players
 

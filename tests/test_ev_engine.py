@@ -121,6 +121,7 @@ class EngineBasics(unittest.TestCase):
             evaluate.cache_clear()
             ev_engine._dealer_dist.cache_clear()
             ev_engine._DEALER_CACHE.clear()
+            ev_engine._PLAYER_MEMO.clear()
             comp = full_shoe(8)
             for idx in hand + (up,):
                 comp = ev_engine._minus(comp, idx)
