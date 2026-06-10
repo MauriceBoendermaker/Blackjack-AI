@@ -45,6 +45,22 @@ PREDICTION_OVERLAP_DEALER = 45
 # (predictions are scaled back). Big upload-time win, negligible accuracy loss.
 API_UPLOAD_MAX_WIDTH = 1280
 
+# Run the 52-class (suit-aware) player model on the dealer crop instead of the
+# rank-only dealer model. Gives dealer suits to the composition; validate the
+# player model's accuracy on dealer-area imagery before enabling. The cutting
+# card only exists in the rank model, so it is still checked every Nth cycle.
+DEALER_USE_PLAYER_MODEL = False
+CUTTING_CARD_CHECK_EVERY = 5
+
+# Active-learning capture (V2 Feature 6): save labeled crops of corrections,
+# sampled confirmed locks, and confirmation-flapping detections to
+# output/training_data/ for review and fine-tuning.
+TRAINING = {
+    "enabled": 1,
+    "confirmed_every": 25,   # save every Nth confirmed lock
+    "max_files": 5000,
+}
+
 # ---------------------------------------------------------------------------
 # Table layout (screen regions, defined at the base capture resolution)
 # ---------------------------------------------------------------------------

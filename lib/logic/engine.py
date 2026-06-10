@@ -35,6 +35,7 @@ from .models import ModelProvider, ModelError
 from .monitor_utils import ScreenCapture, scaled_player_regions, dealer_area_rect, scaling_factors
 from .session_store import SessionStore
 from .strategy import StrategyAdvisor
+from .training_data import TrainingDataCollector
 
 _ACTION_NAMES = {"S": "Stand", "H": "Hit", "D": "Double", "P": "Split", "R": "Surrender"}
 _ACTION_COLOR_KEYS = {"S": "S", "H": "H", "D": "D/H", "P": "P", "R": "R/H"}
@@ -111,6 +112,10 @@ class DetectionEngine:
         self._ocr_last = {"balance": None, "bet": None, "result": None, "ts": 0.0}
         self._ocr_pending = False
         self._ocr_next = 0.0
+        self.training = TrainingDataCollector()
+        self._last_frame = None
+        self._confirm_count = 0
+        self._cc_cycle = 0
 
         self._snapshot_lock = threading.Lock()
         self._snapshot = None
@@ -191,14 +196,36 @@ class DetectionEngine:
         # The dealer area is watched for the whole round: before the lock to
         # find the up-card, after it to count the dealer's playout cards —
         # otherwise the shoe composition silently drifts every round.
+        self._last_frame = frame  # retained for training-data crops
         left, top, right, bottom = self._dealer_rect
         crop = frame[top:bottom, left:right]
-        dealer_future = self._pool.submit(
-            self.provider.dealer_model().predict, crop,
-            constants.PREDICTION_CONFIDENCE_DEALER, constants.PREDICTION_OVERLAP_DEALER)
+        if constants.DEALER_USE_PLAYER_MODEL:
+            # Suit-aware dealer detection via the 52-class player model.
+            dealer_future = self._pool.submit(
+                self.provider.players_model().predict, crop,
+                constants.PREDICTION_CONFIDENCE_PLAYERS,
+                constants.PREDICTION_OVERLAP_PLAYERS)
+        else:
+            dealer_future = self._pool.submit(
+                self.provider.dealer_model().predict, crop,
+                constants.PREDICTION_CONFIDENCE_DEALER,
+                constants.PREDICTION_OVERLAP_DEALER)
 
         player_preds = players_future.result()
         dealer_preds = dealer_future.result()
+        if constants.DEALER_USE_PLAYER_MODEL:
+            # The cutting card only exists in the rank model — poll it cheaply.
+            self._cc_cycle += 1
+            if (not self.cutting_card_seen
+                    and self._cc_cycle % constants.CUTTING_CARD_CHECK_EVERY == 0):
+                try:
+                    cc_preds = self.provider.dealer_model().predict(
+                        crop, constants.PREDICTION_CONFIDENCE_DEALER,
+                        constants.PREDICTION_OVERLAP_DEALER)
+                    dealer_preds = dealer_preds + [
+                        p for p in cc_preds if p["class"] == CUTTING_CARD_CLASS]
+                except ModelError:
+                    pass
         self._metrics["inference_ms"] = (time.perf_counter() - t0) * 1000.0
         self.last_error = None
 
@@ -217,8 +244,8 @@ class DetectionEngine:
                     self.cutting_card_seen = True
                     self.log("Cutting card seen — the shoe will be reshuffled soon.")
                 continue
-            rank = DEALER_CLASS_MAP.get(p["class"])
-            if rank is not None:
+            rank = DEALER_CLASS_MAP.get(p["class"]) or PLAYER_CLASS_MAP.get(p["class"])
+            if rank is not None:  # full "King of Hearts" names in suit mode
                 cards_seen.append(p | {"rank": rank})
 
         if self.dealer_locked:
@@ -259,9 +286,12 @@ class DetectionEngine:
             del self._pending_dealer[key]
 
     def _matches_dealer_card(self, pred, limit_same):
-        """Is this detection the up-card or an already-counted playout card?"""
+        """Is this detection the up-card or an already-counted playout card?
+        Up-card comparison is by rank — a manual full-name correction must
+        still match rank-only detections (and vice versa in suit mode)."""
         limit_flicker = limit_same * 0.4
-        if pred["rank"] == self.dealer_card:
+        if (self.dealer_card
+                and cards.rank_of(pred["rank"]) == cards.rank_of(self.dealer_card)):
             if self._dealer_pos is None:
                 self._dealer_pos = (pred["cx"], pred["cy"])  # adopt (manual lock)
                 return True
@@ -329,8 +359,13 @@ class DetectionEngine:
                     self._pending_extra.pop(key, None)
                 else:
                     self._pending_extra[key] = count
-        # Drop pending hits that were not seen this cycle.
+        # Drop pending hits that were not seen this cycle — and save them as
+        # low-confidence training samples: they're the model's blind spots.
         for key in [k for k in self._pending_extra if k not in seen_pending]:
+            _, name, qx, qy = key
+            if self._last_frame is not None:
+                self._advice_pool.submit(self.training.save_sample, self._last_frame,
+                                         qx * 50.0, qy * 50.0, name, "lowconf")
             del self._pending_extra[key]
 
     def _seat_for_point(self, x, y):
@@ -372,6 +407,12 @@ class DetectionEngine:
         tag = f" (hand {hand + 1})" if seat.split else ""
         self.log(f"P{seat.index + 1} card {len(seat.cards)}{tag}: "
                  f"{pred['name']} ({pred['confidence'] * 100:.0f}%)")
+        # Active learning: sample every Nth confirmed lock as training data.
+        self._confirm_count += 1
+        every = constants.TRAINING.get("confirmed_every", 25)
+        if self._last_frame is not None and self._confirm_count % every == 0:
+            self._advice_pool.submit(self.training.save_sample, self._last_frame,
+                                     pred["cx"], pred["cy"], pred["name"], "confirmed")
 
     @staticmethod
     def _assign_hand(seat, cx):
@@ -504,6 +545,13 @@ class DetectionEngine:
                     if old["counted"]:
                         self.counter.count_card(card_name)
                     self.log(f"P{seat_idx + 1} card {slot + 1} set to {card_name}.")
+                    # A corrected misread is GOLD training data.
+                    if (not old["manual"] and old["cx"] is not None
+                            and card_name != old["name"]
+                            and self._last_frame is not None):
+                        self._advice_pool.submit(
+                            self.training.save_sample, self._last_frame,
+                            old["cx"], old["cy"], card_name, "correction")
             elif card_name is not None and len(seat.cards) < constants.MAX_CARDS_PER_SEAT:
                 hand = self._assign_hand(seat, None) if seat.split else 0
                 seat.cards.append({"name": card_name, "confidence": 1.0,
@@ -538,9 +586,13 @@ class DetectionEngine:
         self.publish_snapshot()
 
     def replace_dealer(self, card_name):
-        """Manual dealer correction; card_name is a full name, rank, or None."""
+        """Manual dealer correction; card_name is a full name, rank, or None.
+        Full names are kept — the suit refines the 52-cell composition."""
         with self._lock:
-            rank = cards.rank_of(card_name) if card_name else None
+            if card_name and " of " in str(card_name):
+                rank = card_name
+            else:
+                rank = cards.rank_of(card_name) if card_name else None
             self._set_dealer(rank, manual=True)
             if rank is None:
                 self._dealer_history.clear()

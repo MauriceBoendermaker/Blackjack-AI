@@ -192,7 +192,21 @@ Region selection reuses the calibration editor pattern (Feature 10 v1).
 
 **Effort:** ~2 days incl. an OCR-region calibration step.
 
-## 6. Self-improving detection + dealer suits + local weights
+## 6. ✅ DONE — Self-improving detection + dealer suits + local weights
+
+> **Shipped 2026-06-10.** (1) `lib/logic/training_data.py`: every card-picker
+> correction (gold), every Nth confirmed lock, and every confirmation-flapping
+> detection is saved to `output/training_data/` as a JPEG crop + YOLO label +
+> provenance JSON (capped, toggle in `constants.TRAINING`); `upload_batch()`
+> pushes a tagged batch to Roboflow for review/retraining. (2) `models.py`
+> gains an **ONNX backend** (onnxruntime, letterbox + NMS + v8 head decode,
+> class names from model metadata) preferred over `.pt` over hosted —
+> drop `models/player_cards.onnx` in and inference goes local. (3) **Dealer
+> suits**: `DEALER_USE_PLAYER_MODEL` runs the 52-class model on the dealer
+> crop (full "King of Hearts" flows into the composition; cutting card still
+> polled from the rank model every Nth cycle; off by default until validated
+> live); manual dealer corrections now keep the suit either way.
+> Tests: `tests/test_training.py` (9 cases).
 
 **What:** Three linked upgrades to the detection stack:
 

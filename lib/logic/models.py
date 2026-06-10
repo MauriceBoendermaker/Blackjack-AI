@@ -62,6 +62,123 @@ class LocalYoloModel:
         return preds
 
 
+def letterbox(image_bgr: np.ndarray, size: int = 640):
+    """Resize keeping aspect, pad to size x size (YOLO preprocessing).
+    Returns (padded, ratio, (pad_x, pad_y))."""
+    h, w = image_bgr.shape[:2]
+    ratio = min(size / w, h and size / h or 1)
+    new_w, new_h = max(1, round(w * ratio)), max(1, round(h * ratio))
+    resized = cv2.resize(image_bgr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    pad_x, pad_y = (size - new_w) / 2.0, (size - new_h) / 2.0
+    top, bottom = int(round(pad_y - 0.1)), int(round(pad_y + 0.1))
+    left, right = int(round(pad_x - 0.1)), int(round(pad_x + 0.1))
+    padded = cv2.copyMakeBorder(resized, top, bottom, left, right,
+                                cv2.BORDER_CONSTANT, value=(114, 114, 114))
+    return padded, ratio, (left, top)
+
+
+def nms(boxes_xyxy: np.ndarray, scores: np.ndarray, iou_threshold: float):
+    """Greedy non-maximum suppression; returns kept indices."""
+    if len(boxes_xyxy) == 0:
+        return []
+    x1, y1, x2, y2 = boxes_xyxy.T
+    areas = np.maximum(0.0, x2 - x1) * np.maximum(0.0, y2 - y1)
+    order = scores.argsort()[::-1]
+    keep = []
+    while order.size:
+        i = order[0]
+        keep.append(int(i))
+        if order.size == 1:
+            break
+        rest = order[1:]
+        ix1 = np.maximum(x1[i], x1[rest])
+        iy1 = np.maximum(y1[i], y1[rest])
+        ix2 = np.minimum(x2[i], x2[rest])
+        iy2 = np.minimum(y2[i], y2[rest])
+        inter = np.maximum(0.0, ix2 - ix1) * np.maximum(0.0, iy2 - iy1)
+        iou = inter / np.maximum(1e-9, areas[i] + areas[rest] - inter)
+        order = rest[iou <= iou_threshold]
+    return keep
+
+
+class OnnxModel:
+    """YOLO weights exported to ONNX (ultralytics: model.export(format='onnx')),
+    run with onnxruntime — up to ~3x faster on CPU than the torch path and no
+    multi-GB torch dependency on the inference machine."""
+
+    name = "Local ONNX"
+
+    def __init__(self, model_path):
+        try:
+            import onnxruntime
+        except ImportError as e:
+            raise ModelError("onnxruntime is not installed "
+                             "(pip install onnxruntime)") from e
+        try:
+            self._session = onnxruntime.InferenceSession(
+                str(model_path), providers=["CPUExecutionProvider"])
+        except Exception as e:
+            raise ModelError(f"Failed to load ONNX model {model_path}: {e}") from e
+        self._input = self._session.get_inputs()[0]
+        shape = self._input.shape  # (1, 3, H, W) — H/W may be symbolic
+        self._size = int(shape[2]) if isinstance(shape[2], int) else 640
+        # ultralytics embeds the class-name dict in the model metadata.
+        self._names = {}
+        meta = self._session.get_modelmeta().custom_metadata_map
+        if "names" in meta:
+            try:
+                import ast
+                self._names = {int(k): str(v) for k, v in
+                               ast.literal_eval(meta["names"]).items()}
+            except (ValueError, SyntaxError):
+                pass
+
+    def predict(self, image_bgr: np.ndarray, confidence=50, overlap=45):
+        conf = max(0.0, min(1.0, confidence / 100.0))
+        iou = max(0.05, min(1.0, overlap / 100.0))
+        padded, ratio, (pad_x, pad_y) = letterbox(image_bgr, self._size)
+        blob = padded[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255.0
+        try:
+            out = self._session.run(None, {self._input.name: blob})[0]
+        except Exception as e:
+            raise ModelError(f"ONNX inference failed: {e}") from e
+        return self._decode(out[0], conf, iou, ratio, pad_x, pad_y)
+
+    def _decode(self, output, conf, iou, ratio, pad_x, pad_y):
+        """ultralytics YOLOv8+ raw head: (4 + n_classes, n_anchors) with
+        cx/cy/w/h in letterboxed pixels."""
+        if output.shape[0] < output.shape[1]:
+            preds = output  # (4+nc, n)
+        else:
+            preds = output.T
+        boxes = preds[:4].T              # (n, cx cy w h)
+        class_scores = preds[4:].T       # (n, nc)
+        cls = class_scores.argmax(axis=1)
+        scores = class_scores[np.arange(len(cls)), cls]
+        mask = scores >= conf
+        boxes, scores, cls = boxes[mask], scores[mask], cls[mask]
+        if not len(boxes):
+            return []
+        xyxy = np.empty_like(boxes)
+        xyxy[:, 0] = boxes[:, 0] - boxes[:, 2] / 2
+        xyxy[:, 1] = boxes[:, 1] - boxes[:, 3] / 2
+        xyxy[:, 2] = boxes[:, 0] + boxes[:, 2] / 2
+        xyxy[:, 3] = boxes[:, 1] + boxes[:, 3] / 2
+        keep = nms(xyxy, scores, iou)
+        results = []
+        for i in keep:
+            cx = (boxes[i, 0] - pad_x) / ratio
+            cy = (boxes[i, 1] - pad_y) / ratio
+            results.append({
+                "cx": float(cx), "cy": float(cy),
+                "width": float(boxes[i, 2] / ratio),
+                "height": float(boxes[i, 3] / ratio),
+                "class": self._names.get(int(cls[i]), str(int(cls[i]))),
+                "confidence": float(scores[i]),
+            })
+        return results
+
+
 class RoboflowModel:
     """Hosted Roboflow inference. Downscales uploads and rescales results."""
 
@@ -133,6 +250,14 @@ class ModelProvider:
             return cls._instance
 
     def _build(self, weights_name, project_id, model_version):
+        # Preference order: local ONNX (lightest/fastest CPU) -> local .pt
+        # (ultralytics) -> hosted API.
+        onnx_path = (constants.MODELS_DIR / weights_name).with_suffix(".onnx")
+        if onnx_path.exists():
+            try:
+                return OnnxModel(onnx_path)
+            except Exception as e:
+                print(f"ONNX weights {onnx_path.name} unusable ({e}); trying .pt.")
         weights = constants.MODELS_DIR / weights_name
         if weights.exists():
             try:
