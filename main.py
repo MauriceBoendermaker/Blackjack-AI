@@ -8,6 +8,15 @@ from lib.logic.log_manager import LogManager, install_redirectors
 
 
 def main():
+    # Per-monitor DPI awareness BEFORE any window exists, so screen-capture
+    # coordinates, calibrated regions, and the overlay HUD line up on
+    # scaled displays.
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
+
     # Logging first, so every later print is captured (stderr included).
     log_manager = LogManager()
     install_redirectors(log_manager)

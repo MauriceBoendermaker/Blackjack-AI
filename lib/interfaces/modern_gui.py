@@ -165,6 +165,9 @@ class ModernBlackjackGUI(tk.Tk):
         self._button(section, "🛡  Bankroll & Risk", self._open_bankroll, C["text_secondary"],
                      tooltip="Risk of ruin, Kelly risk table, Monte Carlo simulation"
                      ).pack(fill=tk.X, pady=4)
+        self._button(section, "🎯  Overlay HUD", self._toggle_hud, C["text_secondary"],
+                     tooltip="Compact always-on-top panel to park next to the stream"
+                     ).pack(fill=tk.X, pady=4)
 
     def _build_counters_section(self, parent):
         section = self._section(parent, "Cards Seen (this shoe)")
@@ -414,6 +417,9 @@ class ModernBlackjackGUI(tk.Tk):
     def _render(self, snap):
         self.table.remember_snapshot(snap)
         self.table.update(snap)
+        hud = getattr(self, "hud", None)
+        if hud is not None and hud.winfo_exists():
+            hud.update_from_snapshot(snap)
 
         count = snap["count"]
         for key, var in self.counter_vars.items():
@@ -497,6 +503,17 @@ class ModernBlackjackGUI(tk.Tk):
     def _open_bankroll(self):
         from .bankroll_window import BankrollWindow
         BankrollWindow(self, self.controller.engine.store)
+
+    def _toggle_hud(self):
+        hud = getattr(self, "hud", None)
+        if hud is not None and hud.winfo_exists():
+            hud.close()
+            return
+        from .hud import OverlayHUD
+        self.hud = OverlayHUD(self, on_close=lambda: setattr(self, "hud", None))
+        snap = self.controller.engine.get_snapshot()
+        if snap:
+            self.hud.update_from_snapshot(snap)
 
     def _maybe_restore_shoe(self):
         """Offer to restore a recent mid-shoe count after a restart."""

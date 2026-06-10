@@ -125,7 +125,18 @@ next to the bet suggestion, and a SIT OUT banner when negative.
 
 **Effort:** ~2–3 days. Synergy: feeds Features 2 and 8 with honest edges.
 
-## 4. Overlay HUD + audio cues
+## 4. ✅ DONE (visual only) — Overlay HUD + audio cues
+
+> **Shipped 2026-06-10, audio deliberately omitted (user choice).**
+> `lib/interfaces/hud.py`: 🎯 toggles a compact frameless always-on-top panel
+> (drag to move, ✕ to close) showing TC/RC/decks, the bet call with exact
+> edge, an insurance alert, advice for your ★ seats (active seats as
+> fallback), +EV side-bet flags, and the session P&L. WS_EX_NOACTIVATE +
+> WS_EX_TOOLWINDOW via ctypes (no new dependency) so it never steals focus
+> and stays out of alt-tab; topmost reasserted every 2 s; updates ride the
+> existing main-thread snapshot poll. main.py now sets per-monitor DPI
+> awareness so HUD/calibration coordinates line up on scaled displays.
+> Tests: `tests/test_hud.py` (pure formatting layer).
 
 **What:** A compact frameless always-on-top HUD (true count, edge, advice for
 your seat, insurance alert, side-bet ● BET flags) you park next to the casino
