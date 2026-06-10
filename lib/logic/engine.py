@@ -27,6 +27,7 @@ from . import cards
 from . import deviations
 from . import ev_engine
 from . import ocr
+from . import seat_quality
 from . import settlement
 from . import shoe
 from . import sidebets
@@ -77,6 +78,9 @@ class DetectionEngine:
         self.my_seats = set()            # seat indices whose P&L the user tracks
         self.bet_placed = float(constants.BASE_BET)  # EUR per owned seat this round
         self.session_pnl = {"units": 0.0, "eur": 0.0, "rounds": 0}
+        # Per-seat book-play tally for Bet Behind (session-scoped — players
+        # come and go, so history from another session would be misleading).
+        self.seat_play = {i: {"book": 0, "n": 0} for i in range(constants.NUM_SEATS)}
 
         self.regions = None
         self._dealer_rect = None
@@ -637,6 +641,17 @@ class DetectionEngine:
         self.log(f"Round {self.round_number} settled (dealer {settle['dealer_total']}{bj}): "
                  + ", ".join(parts))
 
+        # Book-play tally per seat (Bet Behind quality signal).
+        try:
+            verdicts = seat_quality.score_settled_round(
+                settle, snap["seats"], snap["dealer"]["card"], self.strategy)
+            for idx, hand_verdicts in verdicts.items():
+                tally = self.seat_play[idx]
+                tally["n"] += len(hand_verdicts)
+                tally["book"] += sum(hand_verdicts)
+        except Exception as e:
+            self.log(f"Seat-quality error: {type(e).__name__}: {e}")
+
         mine = [s for s in settle["seats"] if s["index"] in self.my_seats]
         if mine:
             units = sum(s["net_units"] for s in mine)
@@ -992,6 +1007,10 @@ class DetectionEngine:
             "hand_of": [c.get("hand", 0) for c in seat.cards],
             "split": True,
             "mine": seat.index in self.my_seats,
+            "book_n": self.seat_play[seat.index]["n"],
+            "book_pct": (self.seat_play[seat.index]["book"]
+                         / self.seat_play[seat.index]["n"]
+                         if self.seat_play[seat.index]["n"] else None),
             "can_split": False,
             "total": "  ·  ".join(hand_lines["total"]),
             "advice": "\n".join(hand_lines["advice"]),
@@ -1020,6 +1039,20 @@ class DetectionEngine:
             per_rank[key] = per_rank.get(key, 0) + n
         return {**count, "per_rank": per_rank,
                 "cards_seen": count["cards_seen"] + sum(extra.values())}
+
+    def _bet_behind_text(self, edge):
+        """Who to bet behind, given the current edge and the seat tallies."""
+        if edge <= 0:
+            return f"-EV now ({edge:+.2%}) — wait for a positive count"
+        candidates = [(i, t["book"] / t["n"], t["n"])
+                      for i, t in self.seat_play.items()
+                      if t["n"] >= 10 and i not in self.my_seats]
+        if not candidates:
+            return f"+EV ({edge:+.2%}) — no seat with 10+ scored hands yet"
+        idx, pct, n = max(candidates, key=lambda c: c[1])
+        if pct < 0.8:
+            return f"+EV ({edge:+.2%}) but best seat plays only {pct:.0%} book"
+        return f"P{idx + 1} ✓ ({edge:+.2%} edge, {pct:.0%} book over {n} hands)"
 
     def publish_snapshot(self):
         with self._lock:
@@ -1053,6 +1086,10 @@ class DetectionEngine:
                     "hand_of": [c.get("hand", 0) for c in seat.cards],
                     "split": False,
                     "mine": seat.index in self.my_seats,
+                    "book_n": self.seat_play[seat.index]["n"],
+                    "book_pct": (self.seat_play[seat.index]["book"]
+                                 / self.seat_play[seat.index]["n"]
+                                 if self.seat_play[seat.index]["n"] else None),
                     "can_split": (len(names) == 2 and cards.is_pair(names)
                                   and cards.hand_value(names) < 21),
                     "total": cards.describe_hand(names),
@@ -1071,8 +1108,9 @@ class DetectionEngine:
                 "insurance": insurance,
                 "side_bets": self._side_bet_evs(ev_count),
                 "count": count,
-                "bet": betting.suggest(count["true"],
-                                       exact_edge=self._predeal_edge(ev_count))["text"],
+                "bet": (suggestion := betting.suggest(
+                    count["true"], exact_edge=self._predeal_edge(ev_count)))["text"],
+                "bet_behind": self._bet_behind_text(suggestion["edge"]),
                 "edge_exact": self._predeal["edge"],
                 "bet_placed": self.bet_placed,
                 "session_pnl": dict(self.session_pnl),

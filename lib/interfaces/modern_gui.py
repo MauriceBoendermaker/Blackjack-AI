@@ -199,7 +199,7 @@ class ModernBlackjackGUI(tk.Tk):
         for key, label in [("round", "Round"), ("running", "Running count"),
                            ("true", "True count"), ("decks", "Decks remaining"),
                            ("seen", "Cards seen"), ("bet", "Bet hint"),
-                           ("pnl", "Session P&L")]:
+                           ("behind", "Bet behind"), ("pnl", "Session P&L")]:
             row = tk.Frame(section, bg=C["bg_secondary"])
             row.pack(fill=tk.X, pady=2)
             tk.Label(row, text=label, font=constants.FONT_BODY, width=14, anchor="w",
@@ -438,6 +438,7 @@ class ModernBlackjackGUI(tk.Tk):
         self.info_vars["decks"].set(f"{count['decks_remaining']:.1f}")
         self.info_vars["seen"].set(str(count["cards_seen"]))
         self.info_vars["bet"].set(snap["bet"])
+        self.info_vars["behind"].set(snap.get("bet_behind", "—"))
         pnl = snap.get("session_pnl") or {}
         if pnl.get("rounds"):
             self.info_vars["pnl"].set(

@@ -255,7 +255,16 @@ session DB + exact engine turn a commodity trainer into a personalized one.
 
 **Effort:** ~3 days for countdown + flashcards + replay grading.
 
-## 8. Bet-behind seat scoring
+## 8. ✅ DONE — Bet-behind seat scoring
+
+> **Shipped 2026-06-10.** `lib/logic/seat_quality.py` infers whether each
+> settled hand was played by the book from its draw count (replaying the CSV
+> over the actual cards — stand-early and hit-when-book-stands both surface;
+> doubles scored charitably, unsplit book-pairs count against). Tallies are
+> session-scoped (players change seats online). Seat names show "· 94%" after
+> 10+ scored hands; the new Game Info "Bet behind" row combines the live edge
+> with the best non-owned seat: "P3 ✓ (+0.4% edge, 96% book over 41 hands)" /
+> waits at −EV. Tests: `tests/test_seat_quality.py` (12 cases).
 
 **What:** Track every seat's play against basic strategy (the data is already
 in each round record); maintain a per-seat "plays book correctly %" score and

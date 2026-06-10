@@ -241,6 +241,8 @@ class TableView:
         if seat["total"].cget("text") != snap["total"]:
             seat["total"].config(text=snap["total"])
         name_text = f"Player {i + 1}" + (" ★" if snap.get("mine") else "")
+        if snap.get("book_pct") is not None and snap.get("book_n", 0) >= 10:
+            name_text += f" · {snap['book_pct']:.0%}"
         if seat["name"].cget("text") != name_text:
             seat["name"].config(text=name_text,
                                 fg=C["warning"] if snap.get("mine") else C["text_on_felt"])
