@@ -50,7 +50,17 @@ rate, and EV-vs-actual variance.
 
 **Effort:** ~2–3 days. Do this first; everything below feeds on it.
 
-## 2. Risk-of-Ruin & bankroll panel (verified math + Monte Carlo)
+## 2. ✅ DONE — Risk-of-Ruin & bankroll panel (verified math + Monte Carlo)
+
+> **Shipped 2026-06-10.** `lib/logic/bankroll.py` + the 🛡 Bankroll & Risk
+> window: lifetime RoR (both verified forms), trip RoR (BJA p.132), the
+> Kelly-fraction risk table (13.53% / 1.83% / 0.034%), bankroll-for-target-RoR
+> inverse, DI/SCORE, certainty equivalent — and a seeded numpy Monte Carlo
+> (10k futures) that bootstrap-resamples **your own settled rounds** once 30+
+> exist (TC-frequency model × your ramp as fallback), reporting ruin %,
+> P(profit), final and max-drawdown quantiles.
+> Tests: `tests/test_bankroll.py` (11 cases incl. landmark values, trip→
+> lifetime convergence, inverse round-trips, deterministic MC).
 
 **What:** A "Bankroll" tab computing, live from your configured ramp and
 recorded rounds:

@@ -162,6 +162,9 @@ class ModernBlackjackGUI(tk.Tk):
         self._button(section, "📊  Session Stats", self._open_stats, C["text_secondary"],
                      tooltip="Round history, count distribution, CSV export"
                      ).pack(fill=tk.X, pady=4)
+        self._button(section, "🛡  Bankroll & Risk", self._open_bankroll, C["text_secondary"],
+                     tooltip="Risk of ruin, Kelly risk table, Monte Carlo simulation"
+                     ).pack(fill=tk.X, pady=4)
 
     def _build_counters_section(self, parent):
         section = self._section(parent, "Cards Seen (this shoe)")
@@ -490,6 +493,10 @@ class ModernBlackjackGUI(tk.Tk):
             return
         from .stats_window import StatsWindow
         StatsWindow(self, store)
+
+    def _open_bankroll(self):
+        from .bankroll_window import BankrollWindow
+        BankrollWindow(self, self.controller.engine.store)
 
     def _maybe_restore_shoe(self):
         """Offer to restore a recent mid-shoe count after a restart."""

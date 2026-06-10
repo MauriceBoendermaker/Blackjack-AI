@@ -185,6 +185,16 @@ class SessionStore:
                          if decided else 0.0),
         }
 
+    def settled_pnl(self, session_only=False):
+        """Per-round EUR results of settled rounds with owned seats — the
+        empirical sample the bankroll Monte Carlo resamples."""
+        where = ("WHERE settlement IS NOT NULL AND pnl_eur IS NOT NULL"
+                 + (" AND session_id = ?" if session_only else ""))
+        args = (self.session_id,) if session_only else ()
+        with self._conn() as con:
+            rows = con.execute(f"SELECT pnl_eur FROM rounds {where}", args).fetchall()
+        return [r[0] for r in rows]
+
     def export_csv(self, path) -> int:
         """Write all recorded rounds to CSV; returns the row count."""
         import csv
