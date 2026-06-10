@@ -19,16 +19,20 @@ def estimate_edge(true_count, betting=None) -> float:
     return b["base_edge"] + b["edge_per_tc"] * true_count
 
 
-def suggest(true_count, betting=None) -> dict:
-    """{"edge", "bet", "sit_out", "text"} for the current count."""
+def suggest(true_count, betting=None, exact_edge=None) -> dict:
+    """{"edge", "bet", "sit_out", "text"} for the current count. When the
+    exact pre-deal EV is available (V2 Feature 3) it replaces the linear
+    true-count estimate — the text says which one it used."""
     b = betting or constants.BETTING
-    edge = estimate_edge(true_count, b)
+    exact = exact_edge is not None
+    edge = exact_edge if exact else estimate_edge(true_count, b)
+    tag = "exact" if exact else "TC est."
     table_min = max(1.0, float(b["table_min"]))
     table_max = float(b["table_max"]) if b["table_max"] else float("inf")
 
     if edge <= 0:
         sit_out = edge < b["base_edge"]  # worse than off-the-top: count is negative
-        text = f"Min bet (€{table_min:g}) — edge {edge:+.2%}"
+        text = f"Min bet (€{table_min:g}) — edge {edge:+.2%} ({tag})"
         if sit_out:
             text += ", consider sitting out"
         return {"edge": edge, "bet": table_min, "sit_out": sit_out, "text": text}
@@ -37,7 +41,7 @@ def suggest(true_count, betting=None) -> dict:
     bet = round(min(max(kelly, table_min), table_max))
     frac = {1.0: "full", 0.5: "1/2", 0.25: "1/4"}.get(b["kelly_fraction"],
                                                       f"{b['kelly_fraction']:g}x")
-    text = f"Bet €{bet:g} (edge {edge:+.2%}, {frac} Kelly)"
+    text = f"Bet €{bet:g} (edge {edge:+.2%} {tag}, {frac} Kelly)"
     if bet >= table_max < float("inf"):
         text += " — table max"
     return {"edge": edge, "bet": float(bet), "sit_out": False, "text": text}

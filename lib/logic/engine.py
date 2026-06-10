@@ -100,6 +100,12 @@ class DetectionEngine:
         self._advice_pending = set()
         self._sidebet_result = ([], None)   # (evs, composition signature)
         self._sidebet_pending = False
+        # The exact pre-deal EV sweep (~15 s pure Python) gets its own thread
+        # so it can never delay per-seat advice; at most one round stale.
+        self._predeal_pool = ThreadPoolExecutor(max_workers=1,
+                                                thread_name_prefix="predeal")
+        self._predeal = {"edge": None, "sig": None}
+        self._predeal_pending = False
 
         self._snapshot_lock = threading.Lock()
         self._snapshot = None
@@ -638,6 +644,7 @@ class DetectionEngine:
         with self._advice_lock:
             self._advice_cache.clear()
             self._sidebet_result = ([], None)
+            self._predeal = {"edge": None, "sig": None}
         self.log("Settings applied — table rules and paytables refreshed.")
         self.publish_snapshot()
 
@@ -768,6 +775,38 @@ class DetectionEngine:
                     "rank_seen_nosuit": dict(count["rank_seen_nosuit"]),
                 })
             return result
+
+    def _predeal_edge(self, count):
+        """Latest exact pre-deal EV (V2 Feature 3), refreshed on its own
+        thread whenever the composition changes. None until the first sweep
+        lands, when disabled, or when no monitor is selected (headless)."""
+        if not constants.BETTING.get("use_exact_edge") or self.capture.monitor is None:
+            return None
+        sig = (count["cards_seen"], tuple(sorted(count["per_rank"].items())),
+               self.counter.deck_count, tuple(sorted(constants.RULES.items())))
+        with self._advice_lock:
+            if self._predeal["sig"] != sig and not self._predeal_pending:
+                self._predeal_pending = True
+                self._predeal_pool.submit(self._predeal_job, sig,
+                                          dict(count["per_rank"]))
+            return self._predeal["edge"]
+
+    def _predeal_job(self, sig, per_rank):
+        try:
+            comp = ev_engine.comp_from_per_rank(per_rank, self.counter.deck_count)
+            edge = (ev_engine.predeal_ev(comp, ev_engine.current_rules())
+                    if sum(comp) >= 52 else None)
+        except Exception as e:
+            edge = None
+            if not self._ev_error_logged:
+                self._ev_error_logged = True
+                self.log(f"Pre-deal EV error: {type(e).__name__}: {e}")
+        with self._advice_lock:
+            self._predeal = {"edge": edge, "sig": sig}
+            self._predeal_pending = False
+        if edge is not None:
+            self.log(f"Exact pre-deal edge: {edge:+.3%}")
+        self.publish_snapshot()
 
     def _sidebet_job(self, sig, count):
         try:
@@ -901,7 +940,9 @@ class DetectionEngine:
                 "insurance": insurance,
                 "side_bets": self._side_bet_evs(ev_count),
                 "count": count,
-                "bet": betting.suggest(count["true"])["text"],
+                "bet": betting.suggest(count["true"],
+                                       exact_edge=self._predeal_edge(ev_count))["text"],
+                "edge_exact": self._predeal["edge"],
                 "bet_placed": self.bet_placed,
                 "session_pnl": dict(self.session_pnl),
                 "round": self.round_number,

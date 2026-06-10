@@ -351,6 +351,16 @@ def evaluate(hand: tuple, up_idx: int, comp: tuple, rules: Rules = DEFAULT_RULES
     if len(_DEALER_CACHE) > _DEALER_CACHE_LIMIT:
         _DEALER_CACHE.clear()  # boundary clear: never evicts mid-recursion
     ev = _Evaluator(up_idx, rules)
+    evs, p_bj = _action_evs(ev, hand, comp, rules, post_split)
+    best = max(evs, key=evs.get)
+    return {"evs": evs, "best": best, "p_dealer_bj": p_bj}
+
+
+def _action_evs(ev: "_Evaluator", hand: tuple, comp: tuple, rules: Rules,
+                post_split: bool = False):
+    """(evs dict, p_dealer_bj) for a hand using a (possibly shared) evaluator.
+    Sharing one _Evaluator across many hands of the same up-card lets their
+    player-tree memos overlap — the key speedup for the pre-deal sweep."""
     total, soft = hand_state(hand)
     two_cards = len(hand) == 2
 
@@ -390,9 +400,66 @@ def evaluate(hand: tuple, up_idx: int, comp: tuple, rules: Rules = DEFAULT_RULES
                 else:  # R — late surrender still loses the full bet to a natural
                     loss = -1.0
                 evs[code] = p_bj * loss + (1.0 - p_bj) * evs[code]
+    return evs, p_bj
 
-    best = max(evs, key=evs.get)
-    return {"evs": evs, "best": best, "p_dealer_bj": p_bj}
+
+@lru_cache(maxsize=32)
+def predeal_ev(comp: tuple, rules: Rules) -> float:
+    """Exact EV of the NEXT round played optimally, per unit bet, from the
+    current pre-deal composition (the dealer's cards are still in the shoe).
+
+    Enumerates dealer up-card x the 55 unordered starting hands without
+    replacement; each hand is solved by evaluate() (split-once model). For
+    peek rules evaluate() is conditioned on no dealer blackjack, so the
+    dealer-BJ branch (player loses 1, naturals push) is mixed back in here;
+    ENHC results already include it. This is the honest replacement for the
+    linear true-count edge model — it sees ten/ace density and shoe depth
+    that a single scalar count cannot."""
+    n = sum(comp)
+    if n < 20:
+        return 0.0
+    if len(_DEALER_CACHE) > _DEALER_CACHE_LIMIT:
+        _DEALER_CACHE.clear()
+    total_ev = 0.0
+    for u in range(10):
+        if not comp[u]:
+            continue
+        p_u = comp[u] / n
+        comp_u = _minus(comp, u)
+        n1 = sum(comp_u)
+        pair_div = n1 * (n1 - 1)
+        completer = TEN if u == ACE else (ACE if u == TEN else None)
+        # ONE evaluator per up-card: all 55 hands share its player-tree memo.
+        ev = _Evaluator(u, rules)
+        for c1 in range(10):
+            if not comp_u[c1]:
+                continue
+            for c2 in range(c1, 10):
+                if c1 == c2:
+                    weight = comp_u[c1] * (comp_u[c1] - 1) / pair_div
+                else:
+                    if not comp_u[c2]:
+                        continue
+                    weight = 2.0 * comp_u[c1] * comp_u[c2] / pair_div
+                if weight <= 0:
+                    continue
+                comp_rest = _minus(_minus(comp_u, c1), c2)
+                n_rest = sum(comp_rest)
+                p_bj = (comp_rest[completer] / n_rest
+                        if completer is not None and n_rest else 0.0)
+                total, _ = hand_state((c1, c2))
+                if total == 21:  # natural: paid bj_pays unless dealer also has one
+                    ev_hand = (1.0 - p_bj) * rules.bj_pays
+                else:
+                    evs, _ = _action_evs(ev, (c1, c2), comp_rest, rules)
+                    ev_hand = max(evs.values())
+                    if rules.peek and p_bj:
+                        # _action_evs is conditional on no dealer BJ for peek.
+                        ev_hand = p_bj * -1.0 + (1.0 - p_bj) * ev_hand
+                total_ev += p_u * weight * ev_hand
+    if len(_DEALER_CACHE) > _DEALER_CACHE_LIMIT:
+        _DEALER_CACHE.clear()  # the sweep inflates it well past the limit
+    return total_ev
 
 
 def advise(player_cards, dealer_rank, per_rank: dict,

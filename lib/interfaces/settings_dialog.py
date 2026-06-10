@@ -55,6 +55,13 @@ class SettingsDialog(tk.Toplevel):
                          int(constants.BETTING["table_min"]))
         row = self._spin(row, "betting:table_max", "Table maximum (€, 0 = none)", 0,
                          1_000_000, int(constants.BETTING["table_max"]))
+        row = self._field(row, "betting:use_exact_edge", "Edge model", "choice",
+                          [("Exact pre-deal EV (slower, honest)", 1),
+                           ("Linear true-count estimate", 0)],
+                          int(constants.BETTING.get("use_exact_edge", 1)))
+        row = self._field(row, "betting:auto_bankroll", "Bankroll updates", "choice",
+                          [("Auto-settle owned seats", 1), ("Manual only", 0)],
+                          int(constants.BETTING.get("auto_bankroll", 1)))
 
         row = self._heading(row, "Side bets offered")
         for key, cfg in constants.SIDE_BETS.items():

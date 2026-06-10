@@ -86,7 +86,19 @@ version personal instead of generic.
 
 **Effort:** ~2 days (closed forms are a page of math; MC is one numpy loop).
 
-## 3. Exact pre-deal EV — replace the linear true-count model
+## 3. ✅ DONE — Exact pre-deal EV — replace the linear true-count model
+
+> **Shipped 2026-06-10.** `ev_engine.predeal_ev()` sweeps all up-cards × 55
+> starting hands without replacement (naturals, dealer-BJ mixing for peek and
+> ENHC, split-once), sharing one evaluator per up-card so hands reuse player-
+> tree memos (~14 s per refresh, down from 35 s naive). It runs on its own
+> dedicated thread — never delaying seat advice — refreshed whenever the
+> composition changes, so at most one round stale (<0.05% drift). The bet
+> hint now reads "edge +x.xx% (exact)" and falls back to the TC estimate
+> until the first sweep lands (toggle: `BETTING["use_exact_edge"]`, also in
+> Settings). Negative exact edge floors the bet and advises sitting out.
+> Sanity anchors: full-shoe ENHC −0.60%, all-tens shoe exactly 0.
+> Tests: `tests/test_predeal.py` (6 cases, engineered exact-value comps).
 
 **What:** Once per round, on the advice thread during the betting window,
 compute the **exact pre-deal round EV** from the live composition (sum over

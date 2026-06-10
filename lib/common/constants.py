@@ -125,6 +125,7 @@ BETTING = {
     "table_min": 10,
     "table_max": 5000,       # 0 = no max
     "auto_bankroll": 1,      # settle owned seats into the bankroll (1/0)
+    "use_exact_edge": 1,     # exact pre-deal EV instead of the linear TC model
 }
 
 # Side bets offered by the table and their paytables (X means pays X:1).
