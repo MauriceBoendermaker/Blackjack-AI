@@ -5,6 +5,7 @@ mss
 screeninfo
 requests
 roboflow
+winocr  # Windows-only: balance/bet/result OCR via the built-in Windows.Media.Ocr
 
 # Optional: local inference instead of the Roboflow API.
 # Drop YOLO weights into models/player_cards.pt / models/dealer_cards.pt and:

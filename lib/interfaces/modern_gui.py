@@ -154,6 +154,11 @@ class ModernBlackjackGUI(tk.Tk):
             tooltip="Drag the seat polygons and dealer area over a live screenshot")
         self.calibrate_btn.pack(fill=tk.X, pady=4)
         self.calibrate_btn.config(state="disabled")
+        self.ocr_btn = self._button(
+            section, "🔡  OCR Regions", self._calibrate_ocr, C["bg_canvas_soft"],
+            tooltip="Mark the balance / bet / result areas to read from the screen")
+        self.ocr_btn.pack(fill=tk.X, pady=4)
+        self.ocr_btn.config(state="disabled")
         self._button(section, "🗒  View Logs", self._open_logs, C["text_secondary"],
                      tooltip="Open the live log window").pack(fill=tk.X, pady=4)
         self._button(section, "⚙  Settings", self._open_settings, C["text_secondary"],
@@ -304,6 +309,7 @@ class ModernBlackjackGUI(tk.Tk):
         self.start_btn.config(state="normal")
         self.regions_btn.config(state="normal")
         self.calibrate_btn.config(state="normal")
+        self.ocr_btn.config(state="normal")
         self.set_status(f"Monitor {idx + 1} confirmed ({self.monitor.width}x{self.monitor.height}).")
 
     def _toggle_detection(self):
@@ -563,6 +569,26 @@ class ModernBlackjackGUI(tk.Tk):
             RegionEditor(self, self.controller.engine.capture, on_save=reload_regions)
         except Exception as e:
             self.set_status(f"Calibration failed: {e}", error=True)
+
+    def _calibrate_ocr(self):
+        if self.monitor is None:
+            return
+        from ..logic.ocr import OCR_AVAILABLE
+        if not OCR_AVAILABLE:
+            self.set_status("OCR needs the winocr package: pip install winocr",
+                            error=True)
+            return
+        from .ocr_region_editor import OcrRegionEditor
+
+        def reload_regions():
+            self.controller.set_monitor(self.monitor)
+            self.set_status("OCR regions saved — balance/bet/result now read "
+                            "from the screen.")
+
+        try:
+            OcrRegionEditor(self, self.controller.engine.capture, on_save=reload_regions)
+        except Exception as e:
+            self.set_status(f"OCR calibration failed: {e}", error=True)
 
     def _on_close(self):
         self.controller.stop()

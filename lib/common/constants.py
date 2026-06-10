@@ -128,6 +128,15 @@ BETTING = {
     "use_exact_edge": 1,     # exact pre-deal EV instead of the linear TC model
 }
 
+# Casino-UI OCR (balance / bet / result banner). Needs winocr (Windows) and
+# per-resolution regions drawn with the OCR-region editor.
+OCR = {
+    "enabled": 1,
+    "interval_s": 1.0,       # read cadence; every engine besides EasyOCR is fine at 1 Hz
+    "sync_bankroll": 1,      # screen balance is ground truth for the bankroll
+    "sync_bet": 1,           # screen bet fills the "bet placed" field
+}
+
 # Side bets offered by the table and their paytables (X means pays X:1).
 # Defaults = Evolution live blackjack. House edges (8 decks, full shoe):
 # Perfect Pairs 4.10%, 21+3 3.70%, Hot 3 5.40%, Bust It 6.18% — all verified

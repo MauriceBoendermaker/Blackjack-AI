@@ -159,7 +159,18 @@ for away-from-screen alerts.
 
 **Effort:** ~2 days.
 
-## 5. OCR: balance, bet, and result banners
+## 5. ✅ DONE — OCR: balance, bet, and result banners
+
+> **Shipped 2026-06-10.** `lib/logic/ocr.py` (Windows.Media.Ocr via `winocr`,
+> verified working on this machine incl. Python 3.14): reads up to three
+> per-resolution screen regions at ~1 Hz on the advice thread — balance syncs
+> the bankroll ("screen is ground truth"), bet fills the bet-placed field,
+> and the result banner snaps to win/lose/push/blackjack and is cross-checked
+> against the computed settlement (a mismatch logs a misread-card warning).
+> Amount parser handles EU and US number formats and the €→'?' OCR quirk.
+> "🔡 OCR Regions" opens a drag-rectangle editor; "Disable OCR" deletes the
+> profile. Toggles in `constants.OCR`. Tests: `tests/test_ocr.py` incl. a
+> live render→OCR round trip.
 
 **What:** Read 2–3 small fixed screen regions at ~1 Hz: account balance,
 current bet, and the round-result banner. Auto-fill the bankroll, capture the

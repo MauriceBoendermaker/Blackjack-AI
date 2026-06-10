@@ -26,6 +26,7 @@ from . import betting
 from . import cards
 from . import deviations
 from . import ev_engine
+from . import ocr
 from . import settlement
 from . import shoe
 from . import sidebets
@@ -106,6 +107,10 @@ class DetectionEngine:
                                                 thread_name_prefix="predeal")
         self._predeal = {"edge": None, "sig": None}
         self._predeal_pending = False
+        self._ocr_regions = None
+        self._ocr_last = {"balance": None, "bet": None, "result": None, "ts": 0.0}
+        self._ocr_pending = False
+        self._ocr_next = 0.0
 
         self._snapshot_lock = threading.Lock()
         self._snapshot = None
@@ -124,6 +129,7 @@ class DetectionEngine:
             self._dealer_rect = dealer_area_rect(res)
             sx, _ = scaling_factors(res)
             self._dist_scale = sx
+            self._ocr_regions = ocr.load_regions(res)
 
     def warm_up(self):
         """Initialize models (network handshake for the hosted API). Call from
@@ -147,6 +153,7 @@ class DetectionEngine:
                         self._maybe_auto_new_round([])
             else:
                 self._detect(frame)
+                self._maybe_ocr(frame)
         except ModelError as e:
             self.last_error = str(e)
             self.log(f"Error: {e}")
@@ -570,6 +577,14 @@ class DetectionEngine:
         if mine:
             units = sum(s["net_units"] for s in mine)
             eur = units * self.bet_placed
+            # Cross-check against a recent OCR'd result banner (your result).
+            banner = self._ocr_last.get("result")
+            if banner and time.time() - self._ocr_last.get("ts", 0) < 30:
+                expected = 1 if units > 0 else (-1 if units < 0 else 0)
+                seen = {"win": 1, "blackjack": 1, "lose": -1, "push": 0}[banner]
+                if expected != seen:
+                    self.log(f"⚠ Result banner says '{banner}' but settlement "
+                             f"computed {units:+g}u — check for a misread card.")
             self.session_pnl["units"] += units
             self.session_pnl["eur"] += eur
             self.session_pnl["rounds"] += 1
@@ -808,6 +823,58 @@ class DetectionEngine:
             self.log(f"Exact pre-deal edge: {edge:+.3%}")
         self.publish_snapshot()
 
+    def _maybe_ocr(self, frame):
+        """Throttled screen-OCR of balance/bet/result crops (advice thread)."""
+        if (not ocr.OCR_AVAILABLE or not self._ocr_regions
+                or not constants.OCR.get("enabled")):
+            return
+        now = time.monotonic()
+        if now < self._ocr_next or self._ocr_pending:
+            return
+        self._ocr_next = now + float(constants.OCR.get("interval_s", 1.0))
+        h, w = frame.shape[:2]
+        crops = {}
+        for key, (left, top, right, bottom) in self._ocr_regions.items():
+            left, top = max(0, left), max(0, top)
+            right, bottom = min(w, right), min(h, bottom)
+            if right - left >= 4 and bottom - top >= 4:
+                crops[key] = frame[top:bottom, left:right].copy()
+        if not crops:
+            return
+        self._ocr_pending = True
+        self._advice_pool.submit(self._ocr_job, crops)
+
+    def _ocr_job(self, crops):
+        try:
+            texts = {}
+            for key, img in crops.items():
+                texts.update(ocr.read_regions(
+                    img, {key: [0, 0, img.shape[1], img.shape[0]]}))
+            values = ocr.interpret(texts)
+        except Exception as e:
+            values = {}
+            if not self._ev_error_logged:
+                self._ev_error_logged = True
+                self.log(f"OCR error: {type(e).__name__}: {e}")
+        finally:
+            self._ocr_pending = False
+        if not values:
+            return
+
+        balance = values.get("balance")
+        if (balance and constants.OCR.get("sync_bankroll")
+                and abs(balance - constants.BETTING["bankroll"]) >= 0.01):
+            constants.BETTING["bankroll"] = balance
+            self.log(f"Bankroll synced from screen: €{balance:g}")
+            self._save_settings_job()
+        bet = values.get("bet")
+        if bet and constants.OCR.get("sync_bet") and bet != self.bet_placed:
+            with self._lock:
+                self.bet_placed = bet
+            self.log(f"Bet placed synced from screen: €{bet:g}")
+        self._ocr_last = {**values, "ts": time.time()}
+        self.publish_snapshot()
+
     def _sidebet_job(self, sig, count):
         try:
             comp52 = shoe.from_counter_snapshot(count, self.counter.deck_count)
@@ -945,6 +1012,7 @@ class DetectionEngine:
                 "edge_exact": self._predeal["edge"],
                 "bet_placed": self.bet_placed,
                 "session_pnl": dict(self.session_pnl),
+                "ocr": dict(self._ocr_last) if self._ocr_regions else None,
                 "round": self.round_number,
                 "cutting_card_seen": self.cutting_card_seen,
                 "activity": self._last_activity,
