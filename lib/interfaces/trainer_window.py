@@ -8,8 +8,8 @@ rounds. EV grading runs on a small worker thread so the UI never blocks.
 
 import queue
 import random
-import threading
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor
 
 from ..common import constants
 from ..logic import trainer
@@ -35,6 +35,11 @@ class TrainerWindow(tk.Toplevel):
         self.store = store
         self.advisor = StrategyAdvisor()
         self._queue = queue.Queue()
+        # One dedicated thread for EV grading: bounded, and (with the
+        # thread-local engine caches) it can't stomp the live engine's memos.
+        self._ev_pool = ThreadPoolExecutor(max_workers=1,
+                                           thread_name_prefix="trainer-ev")
+        self.bind("<Destroy>", self._on_destroy)
         self.after(100, self._drain_queue)
 
         tabs = tk.Frame(self, bg=C["bg_secondary"])
@@ -59,15 +64,23 @@ class TrainerWindow(tk.Toplevel):
             frame.pack_forget()
         self.frames[key].pack(fill=tk.BOTH, expand=True)
 
+    def _on_destroy(self, event):
+        if event.widget is self:
+            self._ev_pool.shutdown(wait=False)
+
     def _drain_queue(self):
+        if not self.winfo_exists():
+            return
         try:
             while True:
                 fn = self._queue.get_nowait()
-                fn()
+                try:
+                    fn()
+                except tk.TclError:
+                    pass  # widget went away between queue and drain
         except queue.Empty:
             pass
-        if self.winfo_exists():
-            self.after(100, self._drain_queue)
+        self.after(100, self._drain_queue)
 
     # ----------------------------------------------------------- countdown
 
@@ -101,18 +114,22 @@ class TrainerWindow(tk.Toplevel):
         self.cd_result.pack(pady=8)
         self._cd_deck = []
         self._cd_started = None
+        self._cd_elapsed = None   # set only when the full deck has been dealt
         self._cd_streak = 0
 
     def _cd_start(self):
         import time
         self._cd_deck = trainer.fresh_deck(random)
         self._cd_started = time.monotonic()
+        self._cd_elapsed = None
         self.cd_btn.config(state="disabled")
         self.cd_result.config(text="Counting…")
         self._cd_show(0)
 
     def _cd_show(self, i):
         import time
+        if not self.winfo_exists():
+            return
         if i >= len(self._cd_deck):
             self.cd_card.config(text="?")
             self._cd_elapsed = time.monotonic() - self._cd_started
@@ -127,8 +144,8 @@ class TrainerWindow(tk.Toplevel):
                    lambda: self._cd_show(i + 1))
 
     def _cd_grade(self):
-        if not self._cd_deck:
-            return
+        if not self._cd_deck or self._cd_elapsed is None:
+            return  # nothing dealt yet, or still dealing
         try:
             answer = int(self.cd_answer.get())
         except ValueError:
@@ -170,7 +187,10 @@ class TrainerWindow(tk.Toplevel):
         self._fc_next()
 
     def _fc_next(self):
+        if not self.winfo_exists():
+            return
         self._fc_card = trainer.make_flashcard(random)
+        self._fc_shown = self._fc_card   # identity for late EV-cost results
         self.fc_question.config(text=self._fc_card["question"])
         self.fc_result.config(text="")
 
@@ -178,6 +198,7 @@ class TrainerWindow(tk.Toplevel):
         card = self._fc_card
         if card is None:
             return
+        self._fc_card = None  # debounce: one answer per card
         right = trainer.grade_flashcard(card, code)
         self._fc_total += 1
         self._fc_right += right
@@ -185,20 +206,22 @@ class TrainerWindow(tk.Toplevel):
             f"✗ book: {trainer.ACTION_NAMES[card['correct']]}"
         self.fc_result.config(text=f"{verdict}\n{card['rule']}\nEV cost: computing…")
         self.fc_score.config(text=f"Score {self._fc_right}/{self._fc_total}")
-        threading.Thread(target=self._fc_ev_cost, args=(card, code),
-                         daemon=True).start()
+        self._ev_pool.submit(self._fc_ev_cost, card, code, verdict)
         self.after(2600, self._fc_next)
 
-    def _fc_ev_cost(self, card, code):
+    def _fc_ev_cost(self, card, code, verdict):
         try:
             cost = trainer.ev_cost(card, code)
         except Exception:
             cost = None
         text = ("n/a" if cost is None else f"{cost:.4f} units of bet")
-        verdict = "✓ correct" if trainer.grade_flashcard(card, code) else \
-            f"✗ book: {trainer.ACTION_NAMES[card['correct']]}"
-        self._queue.put(lambda: self.fc_result.config(
-            text=f"{verdict}\n{card['rule']}\nEV cost: {text}"))
+
+        def show():
+            # Drop the result if the quiz already moved to another card.
+            if self._fc_shown is card:
+                self.fc_result.config(
+                    text=f"{verdict}\n{card['rule']}\nEV cost: {text}")
+        self._queue.put(show)
 
     # -------------------------------------------------------------- replay
 
@@ -225,8 +248,11 @@ class TrainerWindow(tk.Toplevel):
         self._rp_next()
 
     def _rp_next(self):
+        if not self.winfo_exists():
+            return
         if not self._rp_items:
-            self.rp_question.config(text="No recorded rounds yet — play a "
+            self._rp_item = None
+            self.rp_question.config(text="No more recorded rounds — play a "
                                          "session first, then come back.")
             return
         self._rp_item = self._rp_items.pop()

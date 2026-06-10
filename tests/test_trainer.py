@@ -92,6 +92,17 @@ class Replay(unittest.TestCase):
     def test_no_store_is_empty(self):
         self.assertEqual(trainer.replay_items(None), [])
 
+    def test_grading_respects_the_recorded_count(self):
+        # 16 vs 10 at TC +2: the Illustrious-18 index (stand at TC >= 0)
+        # overrides the book hit — grading must agree with the shown count.
+        item = {"cards": ["10 of Hearts", "6 of Clubs"], "dealer": "King",
+                "tc": 2.0, "optimal_text": ""}
+        result = trainer.grade_replay(item, "S", ADV)
+        self.assertTrue(result["right"])
+        self.assertEqual(result["book"], "S")
+        item["tc"] = -2.0
+        self.assertTrue(trainer.grade_replay(item, "H", ADV)["right"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,7 @@ Validated against the Wizard of Odds hand-calculator backend (see
 tests/test_ev_engine.py — golden values fetched by tests/fetch_wizard_goldens.py).
 """
 
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -119,20 +120,36 @@ def hand_state(indices) -> tuple:
 
 # ------------------------------------------------------------ dealer hand
 
-# Manual memo instead of lru_cache: deep ace-up evaluations can touch a few
+# Manual memos instead of lru_cache: deep ace-up evaluations can touch a few
 # hundred thousand dealer states, and LRU eviction at that size THRASHES
 # (entries still needed by sibling subtrees get evicted and recomputed).
-# A plain dict never evicts mid-recursion; evaluate() clears it wholesale at
-# a top-level boundary when it outgrows the limit.
-_DEALER_CACHE = {}
+# A plain dict never evicts mid-recursion; boundary code clears it wholesale
+# only between evaluations.
+#
+# The caches are THREAD-LOCAL (review-verified): three threads evaluate
+# concurrently — the advice thread (seat advice + warm-up), the predeal
+# thread (~15 s sweeps), and trainer EV grading — and a shared dict let one
+# thread's boundary clear wipe another's in-flight working set (measured
+# 2.8x slowdown on the sweep). Per-thread dicts restore the invariant
+# exactly; Feature 9's cross-seat sharing survives because all seat advice
+# runs on the single advice-pool thread.
 _DEALER_CACHE_LIMIT = 600_000
-
-# Shared player-tree memo (V2 Feature 9). All seats at a table face the SAME
-# composition and up-card, so their hit-recursion subtrees overlap heavily —
-# keying the memo module-wide (instead of per evaluate() call) lets seat 2
-# reuse everything seat 1 explored. Cleared only at evaluation boundaries.
-_PLAYER_MEMO = {}
 _PLAYER_MEMO_LIMIT = 400_000
+_TLS = threading.local()
+
+
+def _thread_caches():
+    """(dealer_cache, player_memo) for the calling thread."""
+    caches = getattr(_TLS, "caches", None)
+    if caches is None:
+        caches = ({}, {})
+        _TLS.caches = caches
+    return caches
+
+
+def clear_thread_caches():
+    """Drop the calling thread's memos (tests/benchmarks)."""
+    _TLS.caches = ({}, {})
 
 
 def _dealer_final(comp: tuple, total: int, soft: bool, s17: bool) -> tuple:
@@ -143,8 +160,9 @@ def _dealer_final(comp: tuple, total: int, soft: bool, s17: bool) -> tuple:
         out = [0.0] * 6
         out[total - 17] = 1.0
         return tuple(out)
+    cache = _thread_caches()[0]
     key = (comp, total, soft, s17)
-    cached = _DEALER_CACHE.get(key)
+    cached = cache.get(key)
     if cached is not None:
         return cached
     n = sum(comp)
@@ -161,7 +179,7 @@ def _dealer_final(comp: tuple, total: int, soft: bool, s17: bool) -> tuple:
         for i in range(6):
             acc[i] += p * sub[i]
     result = tuple(acc)
-    _DEALER_CACHE[key] = result
+    cache[key] = result
     return result
 
 
@@ -239,13 +257,14 @@ class _Evaluator:
         return ev
 
     def ev_best(self, total: int, soft: bool, comp: tuple) -> float:
-        """EV of optimal stand/hit play from this state (module-shared memo)."""
+        """EV of optimal stand/hit play from this state (thread-shared memo)."""
+        memo = _thread_caches()[1]
         key = (self._memo_prefix, total, soft, comp)
-        cached = _PLAYER_MEMO.get(key)
+        cached = memo.get(key)
         if cached is not None:
             return cached
         ev = max(self.ev_stand(total, comp), self.ev_hit(total, soft, comp))
-        _PLAYER_MEMO[key] = ev
+        memo[key] = ev
         return ev
 
     def ev_hit(self, total: int, soft: bool, comp: tuple) -> float:
@@ -355,10 +374,11 @@ def evaluate(hand: tuple, up_idx: int, comp: tuple, rules: Rules = DEFAULT_RULES
     units of the initial bet and — for ENHC rules — include the
     dealer-blackjack branch. `post_split` hands can't resplit or surrender
     and may double only under DAS."""
-    if len(_DEALER_CACHE) > _DEALER_CACHE_LIMIT:
-        _DEALER_CACHE.clear()  # boundary clear: never evicts mid-recursion
-    if len(_PLAYER_MEMO) > _PLAYER_MEMO_LIMIT:
-        _PLAYER_MEMO.clear()
+    dealer_cache, player_memo = _thread_caches()
+    if len(dealer_cache) > _DEALER_CACHE_LIMIT:
+        dealer_cache.clear()  # boundary clear: never evicts mid-recursion
+    if len(player_memo) > _PLAYER_MEMO_LIMIT:
+        player_memo.clear()
     ev = _Evaluator(up_idx, rules)
     evs, p_bj = _action_evs(ev, hand, comp, rules, post_split)
     best = max(evs, key=evs.get)
@@ -427,10 +447,11 @@ def predeal_ev(comp: tuple, rules: Rules) -> float:
     n = sum(comp)
     if n < 20:
         return 0.0
-    if len(_DEALER_CACHE) > _DEALER_CACHE_LIMIT:
-        _DEALER_CACHE.clear()
-    if len(_PLAYER_MEMO) > _PLAYER_MEMO_LIMIT:
-        _PLAYER_MEMO.clear()
+    dealer_cache, player_memo = _thread_caches()
+    if len(dealer_cache) > _DEALER_CACHE_LIMIT:
+        dealer_cache.clear()
+    if len(player_memo) > _PLAYER_MEMO_LIMIT:
+        player_memo.clear()
     total_ev = 0.0
     for u in range(10):
         if not comp[u]:
@@ -468,10 +489,10 @@ def predeal_ev(comp: tuple, rules: Rules) -> float:
                         # _action_evs is conditional on no dealer BJ for peek.
                         ev_hand = p_bj * -1.0 + (1.0 - p_bj) * ev_hand
                 total_ev += p_u * weight * ev_hand
-    if len(_DEALER_CACHE) > _DEALER_CACHE_LIMIT:
-        _DEALER_CACHE.clear()  # the sweep inflates it well past the limit
-    if len(_PLAYER_MEMO) > _PLAYER_MEMO_LIMIT:
-        _PLAYER_MEMO.clear()
+    if len(dealer_cache) > _DEALER_CACHE_LIMIT:
+        dealer_cache.clear()  # the sweep inflates it well past the limit
+    if len(player_memo) > _PLAYER_MEMO_LIMIT:
+        player_memo.clear()
     return total_ev
 
 

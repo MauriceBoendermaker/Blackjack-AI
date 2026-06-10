@@ -16,23 +16,30 @@ Scores are session-scoped on purpose — seats change players online, so
 yesterday's discipline says nothing about who sits there now.
 """
 
+from ..common import constants
 from . import cards
 
 
 def follows_book(card_names, dealer_rank, advisor, post_split=False):
     """True/False when the hand's draw count matches book play; None when it
-    can't be judged (too few cards, unknown dealer, missing CSV row)."""
+    can't be judged (too few cards, unknown dealer, missing CSV row, or a
+    physically impossible sequence — likely a misdetection)."""
     hand = [c for c in card_names if c and c != "-"]
     if len(hand) < 2 or not dealer_rank:
+        return None
+    if post_split and (cards.rank_of(hand[0]) == "Ace"
+                       and not constants.RULES["hit_split_aces"]):
+        # Forced one-card hand: zero information about the player.
         return None
     current = hand[:2]
     taken = 2
     while True:
         total = cards.hand_value(current)
         if total >= 21:
-            # Busted while drawing, natural, or made 21 — no decision left;
-            # book-consistent iff no cards beyond this point.
-            return taken == len(hand)
+            # Busted while drawing, natural, or made 21 — no decision left.
+            # Cards beyond this point are physically impossible: misread,
+            # not a player error — abstain instead of dinging the seat.
+            return True if taken == len(hand) else None
         action, _, _ = advisor.advice(current, dealer_rank, post_split=post_split)
         if action is None:
             return None
@@ -66,6 +73,9 @@ def score_settled_round(settle, seats_snap, dealer_rank, advisor):
     `settle` is settlement.settle_round() output, `seats_snap` the snapshot
     seat dicts (for the split flag). Returns {seat_index: [bool, ...]} with
     un-judgeable hands omitted."""
+    if settle.get("dealer_bj") and constants.RULES["peek"]:
+        # Peek games end the hand before anyone acts — nothing to judge.
+        return {}
     by_index = {s["index"]: s for s in seats_snap}
     out = {}
     for seat_entry in settle.get("seats", []):

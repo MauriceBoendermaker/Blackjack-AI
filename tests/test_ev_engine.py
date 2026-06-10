@@ -120,8 +120,7 @@ class EngineBasics(unittest.TestCase):
         def cold(hand, up, budget):
             evaluate.cache_clear()
             ev_engine._dealer_dist.cache_clear()
-            ev_engine._DEALER_CACHE.clear()
-            ev_engine._PLAYER_MEMO.clear()
+            ev_engine.clear_thread_caches()
             comp = full_shoe(8)
             for idx in hand + (up,):
                 comp = ev_engine._minus(comp, idx)
@@ -133,7 +132,7 @@ class EngineBasics(unittest.TestCase):
 
         cold((1, 5), TEN, 1.5)   # 2,6 vs T — deep hit tree, common case
         cold((2, TEN), ACE, 8.0) # 13 vs A — the conditioned deep case
-        ev_engine._DEALER_CACHE.clear()  # don't leave 100s of MB behind
+        ev_engine.clear_thread_caches()  # don't leave 100s of MB behind
 
 
 if __name__ == "__main__":

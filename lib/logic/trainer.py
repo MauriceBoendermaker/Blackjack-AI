@@ -126,7 +126,11 @@ def ev_cost(card, answer_code) -> float | None:
     hand = tuple(sorted(ev_engine.card_index(c) for c in hand_names))
     dealer = ev_engine.card_index(card["dealer"])
     comp = _comp_for_tc(card["tc"], list(hand) + [dealer])
-    rules = ev_engine.Rules(peek=True, surrender=card["source"] == "Fab4")
+    # peek=True is intentional (the index tables are peek-game derived), but
+    # the dealer rule must match the profile that generated the flashcard —
+    # H17 indices graded under S17 would contradict the verdict.
+    rules = ev_engine.Rules(s17=constants.RULES["s17"], peek=True,
+                            surrender=card["source"] == "Fab4")
     result = ev_engine.evaluate(hand, dealer, comp, rules)
     evs = result["evs"]
     if answer_code not in evs:
@@ -151,20 +155,25 @@ def replay_items(store, limit=300) -> list:
         if not dealer:
             continue
         for seat in rec.get("seats", []):
-            hand = [c for c in seat.get("cards", []) if c and c != "-"][:2]
+            all_cards = [c for c in seat.get("cards", []) if c and c != "-"]
+            hand = all_cards[:2]
             if len(hand) < 2 or seat.get("split"):
                 continue
             if cards.hand_value(hand) >= 21:
                 continue
+            # The stored optimal line describes the FINAL hand — only show it
+            # when the quizzed two cards were the whole hand.
+            optimal = seat.get("optimal", "") if len(all_cards) == 2 else ""
             items.append({"cards": hand, "dealer": dealer,
                           "tc": rec.get("true_count", 0.0),
-                          "optimal_text": seat.get("optimal", "")})
+                          "optimal_text": optimal})
     return items
 
 
 def grade_replay(item, answer_code, advisor) -> dict:
-    """Grade against the book line for the recorded hand (R rows fall back to
-    their alternative — no surrender online)."""
+    """Grade the recorded decision WITH the recorded count: the book line
+    plus any index deviation active at that true count (R rows fall back —
+    no surrender online)."""
     action, _, _ = advisor.advice(item["cards"], item["dealer"])
     if not action:
         return {"right": None, "book": None}
@@ -172,5 +181,12 @@ def grade_replay(item, answer_code, advisor) -> dict:
     book = parts[0]
     if book == "R":
         book = parts[1] if len(parts) > 1 else "S"
-    return {"right": answer_code == book, "book": book,
-            "book_name": ACTION_NAMES.get(book, book)}
+    correct = book
+    dealer = cards.dealer_strategy_rank(item["dealer"])
+    if dealer:
+        dev = deviations.index_advice(cards.hand_key(item["cards"]), dealer,
+                                      item.get("tc", 0.0), two_cards=True)
+        if dev is not None:
+            correct = dev["action"]
+    return {"right": answer_code == correct, "book": correct,
+            "book_name": ACTION_NAMES.get(correct, correct)}

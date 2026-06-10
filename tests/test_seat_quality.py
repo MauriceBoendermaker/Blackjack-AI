@@ -56,6 +56,31 @@ class FollowsBook(unittest.TestCase):
         self.assertIsNone(follows_book(["10 of Hearts"], "9", ADV))
         self.assertIsNone(follows_book(["10 of Hearts", "6 of Spades"], None, ADV))
 
+    def test_impossible_sequences_abstain(self):
+        # Cards after a bust can't be a player decision — misread, not error.
+        self.assertIsNone(follows_book(
+            ["10 of Hearts", "6 of Spades", "King of Clubs", "2 of Clubs"],
+            "King", ADV))
+
+    def test_forced_split_aces_abstain(self):
+        # One forced card on split aces says nothing about the player.
+        self.assertIsNone(follows_book(["Ace of Hearts", "9 of Spades"], "6",
+                                       ADV, post_split=True))
+
+    def test_peek_dealer_bj_round_not_scored(self):
+        from lib.common import constants
+        settle = {"dealer_bj": True, "seats": [
+            {"index": 0, "hands": [{"cards": ["10 of Hearts", "King of Spades"]}]}]}
+        seats_snap = [{"index": 0, "split": False}]
+        old = constants.RULES["peek"]
+        try:
+            constants.RULES["peek"] = True
+            self.assertEqual(score_settled_round(settle, seats_snap, "Ace", ADV), {})
+            constants.RULES["peek"] = False  # ENHC: the round still counts
+            self.assertNotEqual(score_settled_round(settle, seats_snap, "Ace", ADV), {})
+        finally:
+            constants.RULES["peek"] = old
+
     def test_surrender_row_falls_back(self):
         # 16 vs 10 is R/H in the CSV; online there's no surrender, so the
         # fallback (hit) is the book line: three cards reaching 17+ = followed.

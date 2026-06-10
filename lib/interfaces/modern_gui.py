@@ -526,8 +526,12 @@ class ModernBlackjackGUI(tk.Tk):
             self.hud.update_from_snapshot(snap)
 
     def _open_trainer(self):
+        existing = getattr(self, "trainer_window", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            return
         from .trainer_window import TrainerWindow
-        TrainerWindow(self, self.controller.engine.store)
+        self.trainer_window = TrainerWindow(self, self.controller.engine.store)
 
     def _maybe_restore_shoe(self):
         """Offer to restore a recent mid-shoe count after a restart."""
