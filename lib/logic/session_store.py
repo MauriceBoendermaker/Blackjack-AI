@@ -185,6 +185,22 @@ class SessionStore:
                          if decided else 0.0),
         }
 
+    def sample_rounds(self, limit=300):
+        """Recent recorded rounds for the replay trainer."""
+        with self._conn() as con:
+            rows = con.execute(
+                "SELECT dealer_card, seats, true_count FROM rounds"
+                " WHERE dealer_card IS NOT NULL ORDER BY id DESC LIMIT ?",
+                (int(limit),)).fetchall()
+        out = []
+        for dealer, seats_json, tc in rows:
+            try:
+                seats = json.loads(seats_json) or []
+            except ValueError:
+                continue
+            out.append({"dealer": dealer, "seats": seats, "true_count": tc})
+        return out
+
     def settled_pnl(self, session_only=False):
         """Per-round EUR results of settled rounds with owned seats — the
         empirical sample the bankroll Monte Carlo resamples."""

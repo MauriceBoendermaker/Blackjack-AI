@@ -173,6 +173,9 @@ class ModernBlackjackGUI(tk.Tk):
         self._button(section, "🎯  Overlay HUD", self._toggle_hud, C["text_secondary"],
                      tooltip="Compact always-on-top panel to park next to the stream"
                      ).pack(fill=tk.X, pady=4)
+        self._button(section, "🎓  Trainer", self._open_trainer, C["text_secondary"],
+                     tooltip="Deck countdown, deviation flashcards, replay drills"
+                     ).pack(fill=tk.X, pady=4)
 
     def _build_counters_section(self, parent):
         section = self._section(parent, "Cards Seen (this shoe)")
@@ -521,6 +524,10 @@ class ModernBlackjackGUI(tk.Tk):
         snap = self.controller.engine.get_snapshot()
         if snap:
             self.hud.update_from_snapshot(snap)
+
+    def _open_trainer(self):
+        from .trainer_window import TrainerWindow
+        TrainerWindow(self, self.controller.engine.store)
 
     def _maybe_restore_shoe(self):
         """Offer to restore a recent mid-shoe count after a restart."""

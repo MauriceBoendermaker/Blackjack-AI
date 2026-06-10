@@ -235,7 +235,18 @@ the model — and local ONNX inference kills the ~0.5–1 s hosted-API latency.
 **Effort:** ~1 day capture plumbing; fine-tune/export ~1–2 days; dealer-suit
 swap ~half a day + live validation.
 
-## 7. Practice & replay trainer
+## 7. ✅ DONE — Practice & replay trainer
+
+> **Shipped 2026-06-10.** 🎓 Trainer window with three drills:
+> **deck countdown** (speed-configurable card flips, final-count grading,
+> time + 5-streak tracking against the <30 s benchmark), **deviation
+> flashcards** generated from the ACTIVE rules profile (S17/H17/Fab4-aware,
+> a TC just above or below each index; graded right/wrong AND in **EV lost
+> per error** by the exact engine on a shoe built at that count — computed
+> off-thread), and **replay drills** from your own recorded rounds (your
+> first two cards vs the dealer at the live count, graded against the book
+> with the original optimal line shown). Logic in `lib/logic/trainer.py`;
+> tests: `tests/test_trainer.py` (6 cases).
 
 **What:** A trainer tab with the drills the commercial tools converge on —
 deck countdown (benchmark: one deck < 30 s, perfect, 5× in a row), running
