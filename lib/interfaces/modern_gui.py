@@ -20,6 +20,7 @@ from ..logic.region_preview import build_region_preview
 from .card_picker import CardPicker
 from .table_view import TableView
 from .tooltip import ToolTip
+from .validation import attach_numeric_entry
 
 C = constants.COLORS
 
@@ -33,7 +34,10 @@ class ModernBlackjackGUI(tk.Tk):
         self.configure(bg=C["bg_primary"])
 
         self.log_manager = log_manager
-        self.controller = DetectionController(log=print)
+        # add_log (not print) so engine WARNING/ERROR levels survive into the
+        # log window instead of being folded into the message text.
+        self.controller = DetectionController(
+            log=log_manager.add_log if log_manager else print)
         self.monitor = None
         self._last_seq = -1
         self._preview_busy = False
@@ -219,10 +223,11 @@ class ModernBlackjackGUI(tk.Tk):
         tk.Label(row, text="Bankroll (€)", font=constants.FONT_BODY, width=14,
                  anchor="w", bg=C["bg_secondary"], fg=C["text_secondary"]
                  ).pack(side=tk.LEFT)
-        self.bankroll_var = tk.StringVar(value=f"{constants.BETTING['bankroll']:g}")
+        self.bankroll_var = tk.StringVar(value=f"{constants.BETTING['bankroll']:.10g}")
         entry = tk.Entry(row, textvariable=self.bankroll_var, width=10,
                          font=constants.FONT_BODY_BOLD)
         entry.pack(side=tk.LEFT)
+        attach_numeric_entry(entry)
         entry.bind("<Return>", lambda e: self._set_bankroll())
         entry.bind("<FocusOut>", lambda e: self._set_bankroll())
 
@@ -233,10 +238,11 @@ class ModernBlackjackGUI(tk.Tk):
         tk.Label(row, text="Bet placed (€)", font=constants.FONT_BODY, width=14,
                  anchor="w", bg=C["bg_secondary"], fg=C["text_secondary"]
                  ).pack(side=tk.LEFT)
-        self.bet_placed_var = tk.StringVar(value=f"{constants.BASE_BET:g}")
+        self.bet_placed_var = tk.StringVar(value=f"{constants.BASE_BET:.10g}")
         bet_entry = tk.Entry(row, textvariable=self.bet_placed_var, width=10,
                              font=constants.FONT_BODY_BOLD)
         bet_entry.pack(side=tk.LEFT)
+        attach_numeric_entry(bet_entry)
         bet_entry.bind("<Return>", lambda e: self._set_bet_placed())
         bet_entry.bind("<FocusOut>", lambda e: self._set_bet_placed())
         tk.Label(section, text="Click a seat's name on the table to mark it as"
@@ -287,6 +293,23 @@ class ModernBlackjackGUI(tk.Tk):
         tk.Label(bar, textvariable=self.metrics_var, font=constants.FONT_SMALL,
                  bg=C["bg_secondary"], fg=C["text_secondary"], anchor="e", padx=12
                  ).pack(side=tk.RIGHT)
+
+        # Reshuffle badge + mid-shoe paytable warning: created once here,
+        # shown/hidden by _render on every snapshot poll (idempotent).
+        self.paytable_warning = tk.Label(
+            bar, text="⚠ Paytable changed mid-shoe", font=constants.FONT_SMALL,
+            bg=C["bg_secondary"], fg=C["danger"], padx=8)
+        self.reshuffle_badge = tk.Frame(bar, bg=C["warning"])
+        tk.Label(self.reshuffle_badge, text="♻ Reshuffle detected",
+                 font=constants.FONT_SMALL, bg=C["warning"], fg=C["bg_primary"],
+                 padx=6).pack(side=tk.LEFT)
+        tk.Button(self.reshuffle_badge, text="×", command=self._dismiss_reshuffle,
+                  bg=C["warning"], fg=C["bg_primary"], relief="flat", bd=0,
+                  cursor="hand2", padx=4, font=constants.FONT_BODY_BOLD
+                  ).pack(side=tk.LEFT)
+
+    def _dismiss_reshuffle(self):
+        self.controller.engine.dismiss_reshuffle_badge()
 
     def set_status(self, message, error=False):
         self.status_var.set(message)
@@ -349,15 +372,27 @@ class ModernBlackjackGUI(tk.Tk):
 
     def _on_card_click(self, seat_idx, slot):
         snapshot = self.controller.engine.get_snapshot()
-        n_cards = len(snapshot["seats"][seat_idx]["cards"]) if snapshot else 0
+        seat_snap = snapshot["seats"][seat_idx] if snapshot else {"cards": []}
+        n_cards = len(seat_snap["cards"])
         round_at_click = snapshot["round"] if snapshot else None
         slot = min(slot, n_cards)  # 99 from the "+" button -> append
         verb = "Replace" if slot < n_cards else "Add"
+        split_info = None
+        if slot >= n_cards and seat_snap.get("split"):
+            # Adding to a split seat: let the user pick the target hand
+            # instead of the engine's count-balancing fallback. Replacing
+            # (slot < n_cards) keeps the card's existing hand tag, and
+            # removal is slot-based — neither needs a selector.
+            hand_of = seat_snap.get("hand_of", [])
+            split_info = {"is_split": True,
+                          "hands": [[n for n, h in zip(seat_snap["cards"], hand_of)
+                                     if h == target] for target in (0, 1)]}
         CardPicker(self, f"Player {seat_idx + 1} — {verb} card {slot + 1}",
                    self.table.card_image,
-                   lambda name: self.controller.engine.replace_card(
-                       seat_idx, slot, name, expected_round=round_at_click),
-                   allow_remove=slot < n_cards)
+                   lambda name, hand_idx=None: self.controller.engine.replace_card(
+                       seat_idx, slot, name, expected_round=round_at_click,
+                       hand_index=hand_idx),
+                   allow_remove=slot < n_cards, split_info=split_info)
 
     def _on_dealer_click(self):
         CardPicker(self, "Dealer up-card", self.table.card_image,
@@ -465,6 +500,17 @@ class ModernBlackjackGUI(tk.Tk):
                 var.set(f"{ev * 100:+.2f}%" + ("  ● BET" if ev > 0 else ""))
                 lbl.config(fg=C["success"] if ev > 0 else C["text_secondary"])
 
+        if snap.get("reshuffle_badge"):
+            if not self.reshuffle_badge.winfo_ismapped():
+                self.reshuffle_badge.pack(side=tk.RIGHT, padx=(0, 10))
+        else:
+            self.reshuffle_badge.pack_forget()
+        if snap.get("paytable_changed_midshoe"):
+            if not self.paytable_warning.winfo_ismapped():
+                self.paytable_warning.pack(side=tk.RIGHT)
+        else:
+            self.paytable_warning.pack_forget()
+
         if snap["error"]:
             self.set_status(f"⚠ {snap['error']}", error=True)
         elif self.controller.running:
@@ -497,8 +543,13 @@ class ModernBlackjackGUI(tk.Tk):
         try:
             value = float(self.bet_placed_var.get().replace(",", "."))
         except ValueError:
-            self.bet_placed_var.set(f"{self.controller.engine.bet_placed:g}")
+            self.bet_placed_var.set(f"{self.controller.engine.bet_placed:.10g}")
             return
+        # Same bound as the bankroll: keeps every later :.10g reset free of
+        # scientific notation, which the keystroke validator would reject.
+        if value > 10_000_000:
+            value = 10_000_000.0
+            self.bet_placed_var.set(f"{value:.10g}")
         if value >= 0:
             self.controller.engine.set_bet_placed(value)
 
@@ -508,7 +559,7 @@ class ModernBlackjackGUI(tk.Tk):
             self.set_status("Session store unavailable.", error=True)
             return
         from .stats_window import StatsWindow
-        StatsWindow(self, store)
+        StatsWindow(self, store, engine=self.controller.engine)
 
     def _open_bankroll(self):
         from .bankroll_window import BankrollWindow
@@ -560,8 +611,12 @@ class ModernBlackjackGUI(tk.Tk):
         try:
             value = float(self.bankroll_var.get().replace(",", "."))
         except ValueError:
-            self.bankroll_var.set(f"{constants.BETTING['bankroll']:g}")
+            self.bankroll_var.set(f"{constants.BETTING['bankroll']:.10g}")
             return
+        # Keystrokes only filter syntax; the bounds clamp happens here.
+        if value > 10_000_000:
+            value = 10_000_000.0
+            self.bankroll_var.set(f"{value:.10g}")
         if value > 0 and value != constants.BETTING["bankroll"]:
             constants.BETTING["bankroll"] = value
             settings.save()

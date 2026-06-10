@@ -19,6 +19,7 @@ class DetectionController:
         self._stop = threading.Event()
         self._thread = None
         self.state = "idle"  # idle | starting | running | stopped | error
+        self._idle_refresh_failed = False  # gates the "Idle Ns" announcement
 
     @property
     def running(self) -> bool:
@@ -45,6 +46,22 @@ class DetectionController:
         self._stop.set()
         self.state = "stopped"
 
+    def _maybe_idle_refresh(self, prev_cycle_ts, now) -> bool:
+        """Refresh model backends when the gap since the previous cycle says
+        the machine slept (lid close, OS suspend) — hosted API sessions do
+        not survive that. Returns False when a gap-triggered refresh failed
+        (e.g. Wi-Fi still reassociating right after the wake): the caller
+        then keeps its gap baseline so the still-open gap re-triggers the
+        refresh every cycle until one succeeds."""
+        gap = now - prev_cycle_ts
+        if gap <= constants.IDLE_REFRESH_GAP_S:
+            return True
+        if not self._idle_refresh_failed:  # announce the gap once, not per retry
+            self.log(f"Idle {gap:.0f}s — refreshing model backends")
+        ok = self.engine.health_check_and_refresh() is not False
+        self._idle_refresh_failed = not ok
+        return ok
+
     def _run(self, stop_event):
         try:
             try:
@@ -59,8 +76,12 @@ class DetectionController:
                 return
 
             self.state = "running"
+            prev_cycle = time.monotonic()
             while not stop_event.is_set():
+                refreshed = self._maybe_idle_refresh(prev_cycle, time.monotonic())
                 activity = self.engine.run_cycle()
+                if refreshed:  # failed refresh keeps the gap open -> retry
+                    prev_cycle = time.monotonic()
                 if activity == "dealing":
                     sleep_s = constants.CYCLE_SLEEP_DEALING
                 elif activity == "complete":

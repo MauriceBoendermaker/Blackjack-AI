@@ -18,6 +18,8 @@ import time
 import uuid
 
 from ..common import constants
+from . import seat_quality
+from .strategy import StrategyAdvisor
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS rounds (
@@ -55,7 +57,8 @@ class SessionStore:
             # Additive migrations for DBs created by older versions.
             existing = {row[1] for row in con.execute("PRAGMA table_info(rounds)")}
             for col, decl in (("settlement", "TEXT"), ("pnl_units", "REAL"),
-                              ("pnl_eur", "REAL"), ("bet_eur", "REAL")):
+                              ("pnl_eur", "REAL"), ("bet_eur", "REAL"),
+                              ("paytable_hash", "TEXT")):
                 if col not in existing:
                     con.execute(f"ALTER TABLE rounds ADD COLUMN {col} {decl}")
 
@@ -64,9 +67,12 @@ class SessionStore:
 
     # -------------------------------------------------------------- rounds
 
-    def record_round(self, snapshot: dict):
+    def record_round(self, snapshot: dict, paytable_hash=None):
         """Persist a completed round from an engine snapshot. Rounds where
-        nothing was dealt are skipped."""
+        nothing was dealt are skipped. `paytable_hash` is the payout
+        fingerprint in force (settlement.paytable_hash()) so analysis can
+        group rounds by paytable. book_action/optimal_action are the raw
+        advice codes (lists per hand for split seats)."""
         seats = [s for s in snapshot["seats"] if s["cards"]]
         if not seats and not snapshot["dealer"]["card"]:
             return
@@ -77,22 +83,22 @@ class SessionStore:
                 "INSERT INTO rounds (ts, session_id, round_number, running_count,"
                 " true_count, decks_remaining, cards_seen, dealer_card,"
                 " dealer_extras, seats, insurance, side_bets,"
-                " settlement, pnl_units, pnl_eur, bet_eur)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " settlement, pnl_units, pnl_eur, bet_eur, paytable_hash)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (time.time(), self.session_id, snapshot["round"],
                  count["running"], count["true"], count["decks_remaining"],
                  count["cards_seen"], snapshot["dealer"]["card"],
                  json.dumps(snapshot["dealer"].get("extras", [])),
                  json.dumps([{k: s[k] for k in
                               ("index", "cards", "total", "advice", "optimal",
-                               "split", "mine")
+                               "split", "mine", "book_action", "optimal_action")
                               if k in s} for s in seats]),
                  json.dumps(snapshot.get("insurance")),
                  json.dumps(snapshot.get("side_bets", [])),
                  json.dumps(settle) if settle else None,
                  settle.get("my_units") if settle else None,
                  settle.get("my_eur") if settle else None,
-                 snapshot.get("bet_placed")))
+                 snapshot.get("bet_placed"), paytable_hash))
 
     # ---------------------------------------------------------- shoe state
 
@@ -185,6 +191,71 @@ class SessionStore:
                          if decided else 0.0),
         }
 
+    def seat_stats(self, session_only: bool = True) -> dict:
+        """Per-seat accuracy drilldown from stored rounds. Pure DB read.
+
+        Returns {seat_index: {"hands", "book_pct", "avg_units",
+        "divergences"}}: settled hands counted from the settlement JSON,
+        book-played % by replaying each settled hand through
+        seat_quality.follows_book (the established measure — None until a
+        hand was judgeable), average net units per settled hand, and the
+        number of rounds whose stored book_action and optimal_action codes
+        (both present) disagree. A compound CSV code ('R/H') agrees when
+        the optimal action matches ANY of its alternatives: the snapshot's
+        '≠ book' marker resolves the compound against the actions actually
+        available under the rules (surrender off, 3+ cards), and the stored
+        raw code does not say which alternative that was."""
+        where = "WHERE session_id = ?" if session_only else ""
+        args = (self.session_id,) if session_only else ()
+        with self._conn() as con:
+            rows = con.execute(
+                f"SELECT dealer_card, seats, settlement FROM rounds {where}",
+                args).fetchall()
+        advisor = StrategyAdvisor()
+        agg = {}
+
+        def tally(idx):
+            return agg.setdefault(idx, {"hands": 0, "units": 0.0, "book_n": 0,
+                                        "book_yes": 0, "divergences": 0})
+
+        for dealer, seats_json, settle_json in rows:
+            try:
+                seats = json.loads(seats_json) or []
+            except (TypeError, ValueError):
+                seats = []
+            for entry in seats:
+                book = entry.get("book_action")
+                opt = entry.get("optimal_action")
+                pairs = zip(book if isinstance(book, list) else [book],
+                            opt if isinstance(opt, list) else [opt])
+                if any(b and o and o not in str(b).split("/") for b, o in pairs):
+                    tally(entry["index"])["divergences"] += 1
+            if not settle_json:
+                continue
+            try:
+                settle = json.loads(settle_json)
+            except (TypeError, ValueError):
+                continue
+            if not settle:
+                continue
+            verdicts = seat_quality.score_settled_round(
+                settle, seats, dealer, advisor)
+            for idx, hand_verdicts in verdicts.items():
+                t = tally(idx)
+                t["book_n"] += len(hand_verdicts)
+                t["book_yes"] += sum(hand_verdicts)
+            for seat_entry in settle.get("seats", []):
+                t = tally(seat_entry["index"])
+                hands = seat_entry.get("hands", [])
+                t["hands"] += len(hands)
+                t["units"] += sum(h.get("units") or 0.0 for h in hands)
+        return {idx: {
+            "hands": t["hands"],
+            "book_pct": t["book_yes"] / t["book_n"] if t["book_n"] else None,
+            "avg_units": t["units"] / t["hands"] if t["hands"] else None,
+            "divergences": t["divergences"],
+        } for idx, t in sorted(agg.items())}
+
     def sample_rounds(self, limit=300):
         """Recent recorded rounds for the replay trainer."""
         with self._conn() as con:
@@ -218,12 +289,12 @@ class SessionStore:
             rows = con.execute(
                 "SELECT ts, session_id, round_number, running_count, true_count,"
                 " decks_remaining, cards_seen, dealer_card, dealer_extras, seats,"
-                " insurance, side_bets, settlement, pnl_units, pnl_eur, bet_eur"
-                " FROM rounds ORDER BY id").fetchall()
+                " insurance, side_bets, settlement, pnl_units, pnl_eur, bet_eur,"
+                " paytable_hash FROM rounds ORDER BY id").fetchall()
         header = ["timestamp", "session", "round", "running_count", "true_count",
                   "decks_remaining", "cards_seen", "dealer_card", "dealer_extras",
                   "seats", "insurance", "side_bets", "settlement", "pnl_units",
-                  "pnl_eur", "bet_eur"]
+                  "pnl_eur", "bet_eur", "paytable_hash"]
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(header)

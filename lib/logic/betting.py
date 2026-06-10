@@ -20,9 +20,10 @@ def estimate_edge(true_count, betting=None) -> float:
 
 
 def suggest(true_count, betting=None, exact_edge=None) -> dict:
-    """{"edge", "bet", "sit_out", "text"} for the current count. When the
-    exact pre-deal EV is available (V2 Feature 3) it replaces the linear
-    true-count estimate — the text says which one it used."""
+    """{"edge", "bet", "sit_out", "text", "capped"} for the current count.
+    When the exact pre-deal EV is available (V2 Feature 3) it replaces the
+    linear true-count estimate — the text says which one it used. "capped"
+    is True iff the Kelly wager was clamped DOWN by the table max."""
     b = betting or constants.BETTING
     exact = exact_edge is not None
     edge = exact_edge if exact else estimate_edge(true_count, b)
@@ -35,16 +36,19 @@ def suggest(true_count, betting=None, exact_edge=None) -> dict:
         text = f"Min bet (€{table_min:g}) — edge {edge:+.2%} ({tag})"
         if sit_out:
             text += ", consider sitting out"
-        return {"edge": edge, "bet": table_min, "sit_out": sit_out, "text": text}
+        return {"edge": edge, "bet": table_min, "sit_out": sit_out, "text": text,
+                "capped": False}
 
     kelly = b["bankroll"] * b["kelly_fraction"] * edge / b["variance"]
+    capped = kelly > table_max  # Kelly wanted more than the table allows
     bet = round(min(max(kelly, table_min), table_max))
     frac = {1.0: "full", 0.5: "1/2", 0.25: "1/4"}.get(b["kelly_fraction"],
                                                       f"{b['kelly_fraction']:g}x")
     text = f"Bet €{bet:g} (edge {edge:+.2%} {tag}, {frac} Kelly)"
     if bet >= table_max < float("inf"):
         text += " — table max"
-    return {"edge": edge, "bet": float(bet), "sit_out": False, "text": text}
+    return {"edge": edge, "bet": float(bet), "sit_out": False, "text": text,
+            "capped": capped}
 
 
 def bet_behind_hint(true_count, betting=None) -> str:

@@ -13,8 +13,30 @@ Honesty rules baked in:
     Euro P&L = units x the user's "bet placed" amount.
 """
 
+import hashlib
+import json
+
 from ..common import constants
 from . import cards
+
+
+def paytable_hash() -> str:
+    """16-hex-char fingerprint of every payout money rides on: enabled
+    side-bet paytables, the blackjack payout, and insurance (fixed 2:1,
+    included so a future rule knob would change the hash). Canonical JSON —
+    sorted keys, compact separators, paytable keys stringified (bust_it uses
+    ints where the others use strs) — so dict ordering and cosmetic keys like
+    labels can never change the digest. Stored with every recorded round; a
+    mid-shoe mismatch means earlier EVs were computed against other payouts."""
+    payload = {
+        "side_bets": {key: {str(k): v for k, v in cfg["paytable"].items()}
+                      for key, cfg in constants.SIDE_BETS.items()
+                      if cfg.get("enabled")},
+        "bj_pays": constants.RULES["bj_pays"],
+        "insurance_pays": 2,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def dealer_final(up_rank, extras):

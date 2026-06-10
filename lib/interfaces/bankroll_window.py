@@ -12,6 +12,7 @@ from tkinter import messagebox
 
 from ..common import constants
 from ..logic import bankroll as br
+from .validation import attach_numeric_entry
 
 C = constants.COLORS
 
@@ -59,8 +60,10 @@ class BankrollWindow(tk.Toplevel):
         tk.Label(sim, text="Simulate", font=constants.FONT_SECTION,
                  bg=C["bg_secondary"], fg=C["text_primary"]).pack(side=tk.LEFT)
         self.rounds_var = tk.IntVar(value=1000)
-        tk.Spinbox(sim, from_=100, to=100_000, increment=100,
-                   textvariable=self.rounds_var, width=8).pack(side=tk.LEFT, padx=8)
+        rounds_spin = tk.Spinbox(sim, from_=100, to=100_000, increment=100,
+                                 textvariable=self.rounds_var, width=8)
+        rounds_spin.pack(side=tk.LEFT, padx=8)
+        attach_numeric_entry(rounds_spin, integer=True)
         tk.Label(sim, text="rounds ×10k futures", font=constants.FONT_BODY,
                  bg=C["bg_secondary"], fg=C["text_secondary"]).pack(side=tk.LEFT)
         tk.Button(sim, text="Run Monte Carlo", command=self._simulate,
@@ -116,13 +119,18 @@ class BankrollWindow(tk.Toplevel):
 
     def _simulate(self):
         (mu, sigma), outcomes, _ = self._round_stats()
+        try:
+            n_rounds = int(self.rounds_var.get())
+        except tk.TclError:  # field left empty mid-edit
+            n_rounds = 1000
+            self.rounds_var.set(n_rounds)
         if len(outcomes) < 30:
             # Model fallback: synthesize outcomes ~ N(mu, sigma) via numpy.
             import numpy as np
             rng = np.random.default_rng(7)
             outcomes = list(rng.normal(mu, sigma, size=5000))
         result = br.monte_carlo(outcomes, constants.BETTING["bankroll"],
-                                int(self.rounds_var.get()))
+                                n_rounds)
         if result is None:
             messagebox.showerror("Monte Carlo", "Not enough data to simulate.",
                                  parent=self)

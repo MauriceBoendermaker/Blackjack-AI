@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from ..common import constants, settings
+from .validation import attach_numeric_entry
 
 C = constants.COLORS
 
@@ -81,6 +82,13 @@ class SettingsDialog(tk.Toplevel):
         note.grid(row=row, column=0, columnspan=2, sticky="w", pady=(10, 4))
         row += 1
 
+        # Inline validation message — _save refuses instead of guessing.
+        self.error_var = tk.StringVar(value="")
+        tk.Label(self, textvariable=self.error_var, font=constants.FONT_SMALL,
+                 bg=C["bg_secondary"], fg=C["danger"], wraplength=360,
+                 justify="left").grid(row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+
         buttons = tk.Frame(self, bg=C["bg_secondary"])
         buttons.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         tk.Button(buttons, text="Save & Apply", command=self._save,
@@ -125,8 +133,9 @@ class SettingsDialog(tk.Toplevel):
         self._vars[key] = ("int", var, None)
         tk.Label(self, text=label, font=constants.FONT_BODY, bg=C["bg_secondary"],
                  fg=C["text_secondary"], anchor="w").grid(row=row, column=0, sticky="w")
-        tk.Spinbox(self, from_=lo, to=hi, textvariable=var, width=8
-                   ).grid(row=row, column=1, sticky="w", padx=(10, 0), pady=2)
+        spin = tk.Spinbox(self, from_=lo, to=hi, textvariable=var, width=8)
+        spin.grid(row=row, column=1, sticky="w", padx=(10, 0), pady=2)
+        attach_numeric_entry(spin, integer=True)
         return row + 1
 
     # -------------------------------------------------------------- save
@@ -138,13 +147,23 @@ class SettingsDialog(tk.Toplevel):
                 data["side_bets"][key.split(":", 1)[1]] = {"enabled": bool(spec.get())}
                 continue
             kind, var, mapping = spec
-            value = mapping[var.get()] if kind == "choice" else var.get()
+            try:
+                value = mapping[var.get()] if kind == "choice" else var.get()
+            except tk.TclError:  # numeric field left empty mid-edit
+                self.error_var.set("Every numeric field needs a whole number.")
+                return
             if key.startswith("betting:"):
                 data["betting"][key.split(":", 1)[1]] = value
             elif key in ("deck_count", "base_bet"):
                 data[key] = value
             else:
                 data["rules"][key] = value
+        if (data["betting"]["table_max"]  # 0 = no maximum
+                and data["betting"]["table_min"] > data["betting"]["table_max"]):
+            self.error_var.set("Table minimum exceeds table maximum — "
+                               "fix the limits before saving.")
+            return
+        self.error_var.set("")
         settings.apply(data)
         settings.save()
         if self.on_apply:

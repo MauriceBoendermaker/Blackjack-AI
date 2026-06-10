@@ -80,6 +80,13 @@ class LogManager:
         message = message.strip()
         if not message:
             return
+        # A plain-print logger folds the level into the text (engine's
+        # _level_aware adapter); recover it so entries still color correctly.
+        if level is None:
+            for prefix in ("WARNING: ", "ERROR: "):
+                if message.startswith(prefix):
+                    level, message = prefix[:-2], message[len(prefix):]
+                    break
         category, detected_level = self._categorize(message)
         entry = LogEntry(datetime.now(), category, message, level or detected_level)
         with self._lock:

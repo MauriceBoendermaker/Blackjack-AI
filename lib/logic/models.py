@@ -24,6 +24,7 @@ class LocalYoloModel:
     """Local ultralytics YOLO weights (models/*.pt). Used when available."""
 
     name = "Local YOLO"
+    hosted = False
 
     def __init__(self, weights_path):
         try:
@@ -107,6 +108,7 @@ class OnnxModel:
     multi-GB torch dependency on the inference machine."""
 
     name = "Local ONNX"
+    hosted = False
 
     def __init__(self, model_path):
         try:
@@ -183,6 +185,7 @@ class RoboflowModel:
     """Hosted Roboflow inference. Downscales uploads and rescales results."""
 
     name = "Roboflow API"
+    hosted = True  # remote session object — does not survive system sleep
 
     def __init__(self, project_id, model_version):
         try:
@@ -281,6 +284,62 @@ class ModelProvider:
                 self._dealer = self._build(
                     "dealer_cards.pt", constants.PROJECT_ID_DEALER, constants.MODEL_VERSION_DEALER)
             return self._dealer
+
+    def has_hosted(self):
+        """True if any initialized backend is a hosted (network) session."""
+        with self._lock:
+            return any(getattr(m, "hosted", False)
+                       for m in (self._players, self._dealer))
+
+    def refresh(self, log=None):
+        """Rebuild hosted model sessions and re-validate local weight files.
+
+        After a long idle (system sleep/restore) the hosted Roboflow session
+        is stale; a local weights file can also be corrupted while the app
+        idles. Hosted backends are rebuilt unconditionally; local backends
+        are reloaded only after their file passes an integrity check (exists,
+        > 1 KB, constructable) — a failing file is reported and the slot
+        falls through to the next backend instead of crashing.
+
+        Blocking work (network handshake, weight load) happens OUTSIDE the
+        lock; each rebuilt model is swapped in atomically. `log` may accept
+        the engine logger's level= keyword.
+        """
+        if log is None:
+            log = lambda message, level=None: print(
+                f"{level}: {message}" if level and level != "INFO" else message)
+        for attr, weights_name, project_id, model_version in (
+                ("_players", "player_cards.pt",
+                 constants.PROJECT_ID_PLAYERS, constants.MODEL_VERSION_PLAYERS),
+                ("_dealer", "dealer_cards.pt",
+                 constants.PROJECT_ID_DEALER, constants.MODEL_VERSION_DEALER)):
+            with self._lock:
+                model = getattr(self, attr)
+            if model is None:
+                continue  # never built — the lazy getter handles first use
+            fresh = self._refresh_one(model, weights_name, project_id,
+                                      model_version, log)
+            with self._lock:
+                setattr(self, attr, fresh)
+
+    def _refresh_one(self, model, weights_name, project_id, model_version, log):
+        if getattr(model, "hosted", False):
+            # Rebuild from scratch via _build: re-checks local weights first,
+            # same preference order as startup.
+            return self._build(weights_name, project_id, model_version)
+        path = constants.MODELS_DIR / weights_name
+        if isinstance(model, OnnxModel):
+            path = path.with_suffix(".onnx")
+        try:
+            size = path.stat().st_size if path.exists() else -1
+            if size <= 1024:  # a real weights file is megabytes, not bytes
+                raise ModelError("file is missing" if size < 0
+                                 else f"file is only {size} bytes")
+            return type(model)(path)
+        except Exception as e:
+            log(f"Local weights {path.name} failed validation ({e}); "
+                "falling back to the next backend.", level="ERROR")
+            return self._build(weights_name, project_id, model_version)
 
     @property
     def backend_name(self):

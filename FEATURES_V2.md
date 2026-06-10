@@ -324,7 +324,39 @@ pre-deal sweep (Feature 3) comfortable.
 
 **Effort:** 1 (half day) → 2 (half day + build setup) → 3 (~1 day) as needed.
 
-## 10. Reliability & trust pack (the gap-scan bundle)
+## 10. ✅ DONE — Reliability & trust pack (the gap-scan bundle)
+
+> **Shipped 2026-06-10.** All six items plus the smaller-improvements list
+> (minus the already-shipped DPI item). Highlights: EV jobs that run >3 s or
+> fail now fall back to the book play with a "(book — EV delayed/failed)"
+> suffix and per-error logging (the once-per-round error latch is gone from
+> all six job types); the cutting card needs `CUTTING_CARD_CONFIRM_FRAMES`
+> distinct-frame sightings before latching and shows a dismissible ♻ badge;
+> auto-new-round needs `EMPTY_FRAMES_FOR_RESET` (5) empty player frames PLUS
+> a dealer-area-empty recheck, and a fired reset logs at WARNING with round
+> context; the card picker shows a Hand 1 / Hand 2 selector on split seats
+> (`replace_card(..., hand_index=)`); all numeric entries validate keystrokes
+> (`lib/interfaces/validation.py`) with commit-time bounds and a
+> table_min ≤ table_max guard; bets capped at table max are counted once per
+> real round and surfaced in the stats window; the active paytables are
+> hashed (sha256/16) into every round record with a sticky mid-shoe-change
+> warning; split-aces advice flows through `strategy.advice(post_split=True)`
+> (the hard-coded engine label is gone); settings changes invalidate only the
+> caches their keys actually affect; model backends self-refresh with retry +
+> backoff after an idle gap (`IDLE_REFRESH_GAP_S`), re-arming until success.
+> Also shipped from the smaller list: per-seat accuracy drilldown in the
+> stats window (book-played %, EV≠book divergences, units/hand via
+> `session_store.seat_stats()`), the TC≥+3-vs-exact insurance cross-validation
+> test (~5.5% disagreement, EV foregone quantified), a settlement
+> end-to-end replay test through the real ingest path, split-detection
+> robustness tests (mutation-verified), and batch cache refresh. Tests:
+> `tests/test_reliability_*.py`, `test_settlement_e2e.py`,
+> `test_split_robustness.py`, `test_insurance_crossval.py`,
+> `test_validation.py`, `test_seat_stats.py` (suite: 133 → 231 tests).
+> A pre-existing bug found during the adversarial review was also fixed:
+> `tests/test_split.py` wrote junk rounds into the real `output/session.db`
+> and clobbered the crash-recovery shoe state on every suite run (DB
+> repaired; backup at `output/session.db.bak-20260610`).
 
 **What:** The highest-value hardening items the code scan confirmed:
 

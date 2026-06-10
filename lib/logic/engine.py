@@ -13,6 +13,7 @@ Performance design (vs. the old implementation):
   * hosted-API uploads are downscaled (see models.RoboflowModel)
 """
 
+import inspect
 import threading
 import time
 from collections import deque
@@ -42,6 +43,20 @@ _ACTION_NAMES = {"S": "Stand", "H": "Hit", "D": "Double", "P": "Split", "R": "Su
 _ACTION_COLOR_KEYS = {"S": "S", "H": "H", "D": "D/H", "P": "P", "R": "R/H"}
 
 
+def _level_aware(log_fn):
+    """Engine logs pass level="WARNING" for entries that must stand out.
+    LogManager.add_log accepts that kwarg, but the GUI injects plain print
+    (its stdout is redirected into the LogManager), which does not — probe
+    once and fold the level into the message for such loggers."""
+    try:
+        inspect.signature(log_fn).bind("probe", level="INFO")
+        return log_fn
+    except (TypeError, ValueError):
+        def adapted(message, level=None):
+            log_fn(f"{level}: {message}" if level and level != "INFO" else message)
+        return adapted
+
+
 class Seat:
     __slots__ = ("index", "cards", "split")
 
@@ -53,7 +68,7 @@ class Seat:
 
 class DetectionEngine:
     def __init__(self, log=print):
-        self.log = log
+        self.log = _level_aware(log)
         self.capture = ScreenCapture()
         self.provider = ModelProvider.get()
         self.strategy = StrategyAdvisor()
@@ -75,9 +90,20 @@ class DetectionEngine:
         self._pending_dealer = {}        # (rank, qx, qy) -> consecutive sightings
         self.round_number = 1
         self.cutting_card_seen = False
+        self._pending_cutting_card = {}  # (qx, qy) -> consecutive sightings
+        self._reshuffle_dismissed = False  # badge hidden; the flag itself stays
         self.my_seats = set()            # seat indices whose P&L the user tracks
         self.bet_placed = float(constants.BASE_BET)  # EUR per owned seat this round
         self.session_pnl = {"units": 0.0, "eur": 0.0, "rounds": 0}
+        # Rounds whose bet suggestion hit the table max (session-scoped). The
+        # latch collapses the many snapshots a round publishes into one tick,
+        # consumed at round end in _reset_round_state.
+        self.bet_capped_rounds = 0
+        self._bet_was_capped = False
+        # Payout fingerprint for this shoe — a mid-shoe paytable change taints
+        # the recorded EVs, so it stays flagged until the next reset_shoe().
+        self._shoe_paytable_hash = settlement.paytable_hash()
+        self.paytable_changed_midshoe = False
         # Per-seat book-play tally for Bet Behind (session-scoped — players
         # come and go, so history from another session would be misleading).
         self.seat_play = {i: {"book": 0, "n": 0} for i in range(constants.NUM_SEATS)}
@@ -91,9 +117,12 @@ class DetectionEngine:
         self._prev_thumb = None
         self._skipped_cycles = 0
         self._empty_frames = 0     # consecutive inference frames with zero detections
+        self._dealer_empty_frames = 0  # consecutive dealer-area frames with no cards
+        self._reset_delay_logged = False  # one INFO per dealer-blocked reset window
         self._last_activity = "waiting"
         self.last_error = None
-        self._ev_error_logged = False
+        self._model_refresh_ts = None  # time.time() of the last idle refresh
+        self._ev_error_keys = set()  # advice-path errors logged once per key per round
 
         # Advice (exact EV + side bets) is computed on a dedicated single
         # worker thread, never under self._lock and never on the Tk thread:
@@ -103,7 +132,7 @@ class DetectionEngine:
                                                thread_name_prefix="advice")
         self._advice_lock = threading.Lock()
         self._advice_cache = {}     # advice key -> ev_engine result (or None)
-        self._advice_pending = set()
+        self._advice_pending = {}   # advice key -> submit time (time.monotonic)
         self._sidebet_result = ([], None)   # (evs, composition signature)
         self._sidebet_pending = False
         # The exact pre-deal EV sweep (~15 s pure Python) gets its own thread
@@ -112,6 +141,9 @@ class DetectionEngine:
                                                 thread_name_prefix="predeal")
         self._predeal = {"edge": None, "sig": None}
         self._predeal_pending = False
+        # Settings signature backing the selective cache invalidation in
+        # refresh_settings — a display-only save must not drop EV caches.
+        self._rules_sig = self._settings_sig()
         self._ocr_regions = None
         self._ocr_last = {"balance": None, "bet": None, "result": None, "ts": 0.0}
         self._ocr_pending = False
@@ -146,6 +178,47 @@ class DetectionEngine:
         self.provider.players_model()
         self.provider.dealer_model()
 
+    def health_check_and_refresh(self) -> bool:
+        """Refresh model backends after a long idle gap (system sleep/restore).
+
+        Hosted Roboflow sessions do not survive a sleep/wake cycle, so they
+        are rebuilt with HEALTH_CHECK_RETRY_COUNT retries and exponential
+        backoff; local-only setups are skipped (loaded weights never go
+        stale). Runs on the worker thread — the sleeps and the blocking
+        network rebuild happen OUTSIDE self._lock, and ModelProvider swaps
+        each rebuilt model atomically under its own lock.
+
+        Returns False only when every attempt failed (the burst lasts ~2 s,
+        often shorter than Wi-Fi reassociation after a wake) so the caller
+        can keep retrying at its own cadence; True when refreshed or when
+        there was nothing hosted to refresh.
+        """
+        if not self.provider.has_hosted():
+            return True
+        for attempt in range(constants.HEALTH_CHECK_RETRY_COUNT):
+            try:
+                self.provider.refresh(log=self.log)
+            except ModelError as e:
+                if attempt + 1 >= constants.HEALTH_CHECK_RETRY_COUNT:
+                    with self._lock:
+                        self.last_error = f"Model refresh failed: {e}"
+                    self.log(f"Model refresh failed after "
+                             f"{constants.HEALTH_CHECK_RETRY_COUNT} attempts: {e}",
+                             level="ERROR")
+                    return False
+                delay = constants.HEALTH_CHECK_BACKOFF_BASE * (2 ** attempt)
+                self.log(f"Model refresh failed ({e}); retrying in {delay:.1f}s",
+                         level="WARNING")
+                time.sleep(delay)
+            else:
+                with self._lock:
+                    self._model_refresh_ts = time.time()
+                    self.last_error = None
+                self.log(f"Model backends refreshed "
+                         f"({self.provider.backend_name}).")
+                return True
+        return False
+
     # ------------------------------------------------------------ main cycle
 
     def run_cycle(self) -> str:
@@ -157,8 +230,13 @@ class DetectionEngine:
             if self._frame_unchanged(frame):
                 skipped = True
                 if self._empty_frames > 0:
-                    # Unchanged since an empty frame == still empty.
+                    # Unchanged since an empty frame == still empty. The dealer
+                    # area keeps its last observed state too: extend its empty
+                    # run only if one was already going (a card the rank model
+                    # saw on that frame is still there on an unchanged frame).
                     with self._lock:
+                        if self._dealer_empty_frames > 0:
+                            self._dealer_empty_frames += 1
                         self._maybe_auto_new_round([])
             else:
                 self._detect(frame)
@@ -217,40 +295,58 @@ class DetectionEngine:
 
         player_preds = players_future.result()
         dealer_preds = dealer_future.result()
+        cc_checked = True  # the rank model reports the cutting card every frame
         if constants.DEALER_USE_PLAYER_MODEL:
-            # The cutting card only exists in the rank model — poll it cheaply.
+            # The cutting card only exists in the rank model — poll it cheaply
+            # every Nth cycle, but EVERY cycle once a sighting is pending so
+            # the confirmation run is not stretched across poll gaps.
             self._cc_cycle += 1
+            cc_checked = False
             if (not self.cutting_card_seen
-                    and self._cc_cycle % constants.CUTTING_CARD_CHECK_EVERY == 0):
+                    and (self._pending_cutting_card
+                         or self._cc_cycle % constants.CUTTING_CARD_CHECK_EVERY == 0)):
                 try:
                     cc_preds = self.provider.dealer_model().predict(
                         crop, constants.PREDICTION_CONFIDENCE_DEALER,
                         constants.PREDICTION_OVERLAP_DEALER)
                     dealer_preds = dealer_preds + [
                         p for p in cc_preds if p["class"] == CUTTING_CARD_CLASS]
+                    cc_checked = True
                 except ModelError:
                     pass
         self._metrics["inference_ms"] = (time.perf_counter() - t0) * 1000.0
         self.last_error = None
 
         with self._lock:
-            self._process_dealer(dealer_preds)
+            self._process_dealer(dealer_preds, cc_checked=cc_checked)
             self._process_players(player_preds)
             self._maybe_auto_new_round(player_preds)
 
     # --------------------------------------------------------------- dealer
 
-    def _process_dealer(self, predictions):
+    def _process_dealer(self, predictions, cc_checked=True):
+        """cc_checked: whether this frame's predictions could have contained
+        the cutting card (False on suit-mode cycles that skipped the poll)."""
         cards_seen = []
+        cc_keys = set()
         for p in predictions:
             if p["class"] == CUTTING_CARD_CLASS:
-                if not self.cutting_card_seen:
-                    self.cutting_card_seen = True
-                    self.log("Cutting card seen — the shoe will be reshuffled soon.")
+                self._note_cutting_card(p, cc_keys)
                 continue
             rank = DEALER_CLASS_MAP.get(p["class"]) or PLAYER_CLASS_MAP.get(p["class"])
             if rank is not None:  # full "King of Hearts" names in suit mode
                 cards_seen.append(p | {"rank": rank})
+        if cc_checked:
+            # A checked frame without the sighting breaks the confirmation run
+            # (same decay rule as pending dealer hits).
+            for key in [k for k in self._pending_cutting_card if k not in cc_keys]:
+                del self._pending_cutting_card[key]
+        # The auto-reset gate wants the dealer area provably clear, not just
+        # the player model gone quiet (see _maybe_auto_new_round).
+        if cards_seen:
+            self._dealer_empty_frames = 0
+        else:
+            self._dealer_empty_frames += 1
 
         if self.dealer_locked:
             self._track_dealer_playout(cards_seen)
@@ -267,6 +363,25 @@ class DetectionEngine:
         if len(recent) == constants.DEALER_CONFIRM_FRAMES and len(set(recent)) == 1:
             self._dealer_pos = (best["cx"], best["cy"])
             self._set_dealer(recent[0], manual=False)
+
+    def _note_cutting_card(self, pred, keys_seen):
+        """One cutting-card sighting proves nothing — require
+        CUTTING_CARD_CONFIRM_FRAMES consecutive checked-frame sightings at the
+        same quantized position before latching the reshuffle flag."""
+        if self.cutting_card_seen:
+            return
+        key = (round(pred["cx"] / 50.0), round(pred["cy"] / 50.0))
+        if key in keys_seen:
+            return  # overlapping boxes on one frame are still one sighting
+        keys_seen.add(key)
+        count = self._pending_cutting_card.get(key, 0) + 1
+        if count >= constants.CUTTING_CARD_CONFIRM_FRAMES:
+            self.cutting_card_seen = True
+            self._pending_cutting_card.clear()
+            self.log("Cutting card confirmed — the shoe will be reshuffled soon.",
+                     level="WARNING")
+        else:
+            self._pending_cutting_card[key] = count
 
     def _track_dealer_playout(self, cards_seen):
         """Count the dealer's hole/hit cards after the up-card locks. Same
@@ -466,33 +581,54 @@ class DetectionEngine:
 
         `player_preds` is the UNFILTERED full-frame prediction list, so a
         lingering dealer card (which the player model also detects) keeps the
-        frame "non-empty" and blocks a premature reset. No extra inference —
-        and therefore no network call — happens here; this runs under _lock.
+        frame "non-empty" and blocks a premature reset. The dealer area must
+        additionally have been clear (per the dealer model, tracked in
+        _process_dealer) for the same EMPTY_FRAMES_FOR_RESET stretch. No extra
+        inference — and therefore no network call — happens here; this runs
+        under _lock.
         """
         if player_preds:
             self._empty_frames = 0
+            self._reset_delay_logged = False
             return
         if self._activity() != "complete":
             return
         self._empty_frames += 1
-        if self._empty_frames < 2:
+        if self._empty_frames < constants.EMPTY_FRAMES_FOR_RESET:
+            return
+        if self._dealer_empty_frames < constants.EMPTY_FRAMES_FOR_RESET:
+            # The dealer model still sees cards the player model missed —
+            # likely a stream hiccup, not a cleared table. Hold the round.
+            if not self._reset_delay_logged:
+                self._reset_delay_logged = True
+                self.log("Auto round reset delayed — dealer area still occupied "
+                         f"after {self._empty_frames} empty player frames.")
             return
         self._empty_frames = 0
-        self.log(f"Table cleared — starting round {self.round_number + 1}.")
+        self._reset_delay_logged = False
+        occupied = ", ".join(f"P{s.index + 1}×{len(s.cards)}"
+                             for s in self.seats if s.cards)
+        dealer_state = (f"{self.dealer_card} +{len(self.dealer_extras)} draws"
+                        if self.dealer_card else "none")
+        self.log(f"Table cleared — auto-starting round {self.round_number + 1} "
+                 f"(round {self.round_number} had seats [{occupied}], "
+                 f"dealer {dealer_state}).", level="WARNING")
         self._reset_round_state()
 
     def _reset_round_state(self):
         # Settle and persist the round that just ended (and the shoe state, so
         # a restart mid-shoe doesn't lose the count) before wiping the table.
         snap = self.get_snapshot()
-        if snap and (snap["dealer"]["card"]
-                     or any(s["cards"] for s in snap["seats"])):
+        had_activity = bool(snap and (snap["dealer"]["card"]
+                                      or any(s["cards"] for s in snap["seats"])))
+        if had_activity:
             settle = self._settle_round(snap)
             snap = {**snap, "settlement": settle, "bet_placed": self.bet_placed}
             if self.store is not None:
                 self._advice_pool.submit(
                     self._persist_round_job, snap, self.counter.get_state(),
-                    self.round_number, self.cutting_card_seen)
+                    self.round_number, self.cutting_card_seen,
+                    self._shoe_paytable_hash)
         for seat in self.seats:
             seat.cards.clear()
             seat.split = False
@@ -504,7 +640,16 @@ class DetectionEngine:
         self.dealer_card = None
         self.dealer_locked = False
         self._dealer_counted = False
-        self._ev_error_logged = False
+        with self._advice_lock:
+            self._ev_error_keys.clear()
+        if self._bet_was_capped:
+            self._bet_was_capped = False
+            # Only count rounds where cards were actually dealt — otherwise
+            # idle new-round ticks with a capped config inflate the telemetry.
+            if had_activity:
+                self.bet_capped_rounds += 1
+                self.log(f"Bet capped at table max "
+                         f"({self.bet_capped_rounds}× this session)", level="WARNING")
         self.round_number += 1
         if self.cutting_card_seen:
             self.log("Reminder: cutting card was seen — reset the shoe count after the shuffle.")
@@ -521,6 +666,11 @@ class DetectionEngine:
         with self._lock:
             self.counter.reset_shoe()
             self.cutting_card_seen = False
+            self._pending_cutting_card.clear()
+            self._reshuffle_dismissed = False  # next confirmation shows a fresh badge
+            # A fresh shoe starts clean under whatever paytables now apply.
+            self._shoe_paytable_hash = settlement.paytable_hash()
+            self.paytable_changed_midshoe = False
             # Cards already on the table belong to the pre-reset history;
             # detach them so later corrections can't drive the fresh count negative.
             for seat in self.seats:
@@ -532,12 +682,24 @@ class DetectionEngine:
         self.log("Shoe counts reset.")
         self.publish_snapshot()
 
-    def replace_card(self, seat_idx, slot, card_name, expected_round=None):
+    def dismiss_reshuffle_badge(self):
+        """Hide the reshuffle badge for the rest of this shoe. The underlying
+        cutting_card_seen flag stays set (persistence + end-of-round reminder)."""
+        with self._lock:
+            self._reshuffle_dismissed = True
+        self.publish_snapshot()
+
+    def replace_card(self, seat_idx, slot, card_name, expected_round=None,
+                     hand_index=None):
         """Manual correction from the UI. card_name=None removes the card.
 
         `expected_round` is the round number the user was looking at when the
         picker opened; if the round advanced meanwhile (auto reset), the
         correction targets a hand that no longer exists and is discarded.
+
+        `hand_index` (0 or 1) routes an ADDED card to that hand of a split
+        seat; None (or any out-of-range value) keeps the automatic
+        nearest-hand routing. Replacing keeps the card's existing hand tag.
         """
         with self._lock:
             if expected_round is not None and expected_round != self.round_number:
@@ -569,12 +731,17 @@ class DetectionEngine:
                             self.training.save_sample, self._last_frame,
                             old["cx"], old["cy"], card_name, "correction")
             elif card_name is not None and len(seat.cards) < constants.MAX_CARDS_PER_SEAT:
-                hand = self._assign_hand(seat, None) if seat.split else 0
+                if seat.split and hand_index in (0, 1):
+                    hand = hand_index
+                else:
+                    hand = self._assign_hand(seat, None) if seat.split else 0
                 seat.cards.append({"name": card_name, "confidence": 1.0,
                                    "cx": None, "cy": None, "manual": True,
                                    "counted": True, "hand": hand})
                 self.counter.count_card(card_name)
-                self.log(f"P{seat_idx + 1} card {len(seat.cards)} added: {card_name}.")
+                tag = f" (hand {hand + 1})" if seat.split else ""
+                self.log(f"P{seat_idx + 1} card {len(seat.cards)}{tag} "
+                         f"added: {card_name}.")
         self.publish_snapshot()
 
     def set_split(self, seat_idx, on=True):
@@ -684,14 +851,19 @@ class DetectionEngine:
         except Exception:
             pass
 
-    def _persist_round_job(self, snap, counter_state, round_number, cutting):
+    def _persist_round_job(self, snap, counter_state, round_number, cutting,
+                           paytable_hash):
+        # The hash is captured under _lock at round end like every other
+        # argument — this job can queue behind slow EV work, and a paytable
+        # saved in the settings dialog meanwhile must not restamp a round
+        # that was settled under the old payouts.
         try:
-            self.store.record_round(snap)
+            self.store.record_round(snap, paytable_hash=paytable_hash)
             self.store.save_shoe_state(counter_state, round_number, cutting)
         except Exception as e:
-            if not self._ev_error_logged:
-                self._ev_error_logged = True
-                self.log(f"Session store error: {type(e).__name__}: {e}")
+            self._log_ev_error(("persist", round_number),
+                               f"Session store error persisting round "
+                               f"{round_number}: {e!r}")
 
     def _save_state_job(self):
         try:
@@ -729,51 +901,109 @@ class DetectionEngine:
             self.bet_placed = max(0.0, float(eur))
         self.publish_snapshot()
 
+    @staticmethod
+    def _settings_sig():
+        """Signature of the settings the advice caches are keyed on. The
+        (RULES, DECK_COUNT) part feeds the EV/pre-deal caches, the side-bet
+        part (enabled flags + paytables) only the side-bet EVs. Paytable keys
+        stringify because bust_it uses ints where the others use strs."""
+        side = tuple(sorted(
+            (key, bool(cfg.get("enabled")),
+             tuple(sorted((str(k), v) for k, v in (cfg.get("paytable") or {}).items())))
+            for key, cfg in constants.SIDE_BETS.items()))
+        return (tuple(sorted(constants.RULES.items())), constants.DECK_COUNT, side)
+
     def refresh_settings(self):
         """Re-read runtime settings (rules, deck count, side bets) and drop
-        advice caches keyed on the old config. Called after the settings
-        dialog saves."""
+        only the advice caches keyed on what actually changed — a display
+        preference must not discard a finished ~15 s pre-deal sweep. Called
+        after the settings dialog saves; the closing publish_snapshot
+        resubmits advice jobs for live hands (the proactive recompute)."""
+        old_sig, new_sig = self._rules_sig, self._settings_sig()
+        new_hash = settlement.paytable_hash()
         with self._lock:
             self.counter.deck_count = constants.DECK_COUNT
+            self._rules_sig = new_sig
+            if new_hash != self._shoe_paytable_hash:
+                # The shoe was dealt under other payouts: every EV recorded
+                # earlier this shoe is suspect. Sticky until reset_shoe().
+                self._shoe_paytable_hash = new_hash
+                self.paytable_changed_midshoe = True
+                self.log(f"Paytables changed mid-shoe (round {self.round_number})"
+                         " — EVs recorded earlier this shoe used the old"
+                         " payouts.", level="WARNING")
         with self._advice_lock:
-            self._advice_cache.clear()
-            self._sidebet_result = ([], None)
-            self._predeal = {"edge": None, "sig": None}
+            if new_sig[:2] != old_sig[:2]:   # RULES or DECK_COUNT changed
+                self._advice_cache.clear()
+                self._predeal = {"edge": None, "sig": None}
+            if new_sig[2] != old_sig[2]:     # side-bet set or paytables changed
+                self._sidebet_result = ([], None)
         self.log("Settings applied — table rules and paytables refreshed.")
         self.publish_snapshot()
 
     # ------------------------------------------------------------- snapshot
 
+    def _log_ev_error(self, dedup_key, message):
+        """ERROR-log an advice-path failure, deduped per key per round (the
+        set clears in _reset_round_state) so a flapping job can't flood the
+        log while every distinct failure still leaves a trace."""
+        with self._advice_lock:
+            if dedup_key in self._ev_error_keys:
+                return
+            self._ev_error_keys.add(dedup_key)
+        self.log(message, level="ERROR")
+
+    @staticmethod
+    def _book_fallback(book, reason):
+        """The book play dressed as the seat's optimal line while the EV job
+        is delayed or failed; '' when the seat has no book advice either."""
+        book_text, book_color = book
+        if not book_text or book_text == "-":
+            return "", constants.ACTION_COLORS["-"]
+        return (f"{book_text} (book — {reason})",
+                book_color or constants.ACTION_COLORS["-"])
+
     def _optimal_advice(self, names, dealer_rank, per_rank, csv_action,
-                        post_split=False):
-        """Exact composition-dependent advice for a seat ('' when no decision).
+                        book=("", None), post_split=False):
+        """Exact composition-dependent advice for a seat: (text, color, code)
+        — '' / None code when no decision applies. The code is the raw
+        best-EV action letter ('S', 'H', ...) once the exact result is in,
+        None for placeholders and book fallbacks; it rides into the recorded
+        seats JSON next to the CSV book code.
 
         Non-blocking: returns the cached EV result when this exact
         (hand, dealer, composition, rules) was already computed; otherwise
         submits a job to the advice thread and returns a placeholder — the
         finished job publishes a fresh snapshot with the real line. Heavy EV
-        recursion therefore never runs under self._lock or on the Tk thread."""
+        recursion therefore never runs under self._lock or on the Tk thread.
+        `book` is the seat's already-computed basic-strategy (text, color):
+        a job pending past EV_ADVICE_TIMEOUT_S falls back to it instead of a
+        stuck placeholder, an errored job (None in the cache) likewise — and
+        a late-landing result still upgrades to the normal Optimal line."""
         hand = [c for c in names if c and c != "-"]
         if len(hand) < 2 or not dealer_rank or cards.hand_value(hand) >= 21:
-            return "", constants.ACTION_COLORS["-"]
+            return "", constants.ACTION_COLORS["-"], None
         key = (tuple(sorted(hand)), dealer_rank, post_split,
                tuple(sorted(per_rank.items())), self.counter.deck_count,
                tuple(sorted(constants.RULES.items())))
         with self._advice_lock:
             if key not in self._advice_cache:
-                if key not in self._advice_pending:
-                    self._advice_pending.add(key)
+                submitted = self._advice_pending.get(key)
+                if submitted is None:
+                    self._advice_pending[key] = time.monotonic()
                     self._advice_pool.submit(self._advice_job, key, list(hand),
                                              dealer_rank, dict(per_rank), post_split)
-                return "Optimal: …", constants.ACTION_COLORS["-"]
+                elif time.monotonic() - submitted > constants.EV_ADVICE_TIMEOUT_S:
+                    return (*self._book_fallback(book, "EV delayed"), None)
+                return "Optimal: …", constants.ACTION_COLORS["-"], None
             result = self._advice_cache[key]
         if result is None:
-            return "", constants.ACTION_COLORS["-"]
+            return (*self._book_fallback(book, "EV failed"), None)
         best = result["best"]
         text = f"Optimal: {_ACTION_NAMES[best]} ({result['evs'][best]:+.3f})"
         if self._csv_primary(csv_action, result["evs"]) not in (None, best):
             text += " ≠ book"
-        return text, constants.ACTION_COLORS[_ACTION_COLOR_KEYS[best]]
+        return text, constants.ACTION_COLORS[_ACTION_COLOR_KEYS[best]], best
 
     def _advice_job(self, key, hand, dealer_rank, per_rank, post_split=False):
         try:
@@ -782,14 +1012,13 @@ class DetectionEngine:
                                       post_split=post_split)
         except Exception as e:
             result = None
-            if not self._ev_error_logged:
-                self._ev_error_logged = True
-                self.log(f"EV engine error: {type(e).__name__}: {e}")
+            self._log_ev_error(key, f"EV engine error for {hand} vs "
+                                    f"{dealer_rank}: {e!r}")
         with self._advice_lock:
             if len(self._advice_cache) > 1024:
                 self._advice_cache.clear()
             self._advice_cache[key] = result
-            self._advice_pending.discard(key)
+            self._advice_pending.pop(key, None)
         self.publish_snapshot()
 
     def flush_advice(self, timeout=15.0) -> bool:
@@ -840,9 +1069,9 @@ class DetectionEngine:
         try:
             info = ev_engine.insurance_advice(per_rank)
         except Exception as e:
-            if not self._ev_error_logged:
-                self._ev_error_logged = True
-                self.log(f"EV engine error: {type(e).__name__}: {e}")
+            self._log_ev_error(("insurance", dealer_rank),
+                               f"EV engine error for insurance vs dealer "
+                               f"{dealer_rank}: {e!r}")
             return None
         verb = "TAKE" if info["take"] else "Decline"
         info["text"] = f"Insurance: {verb} ({info['ev']:+.3f}/unit)"
@@ -892,9 +1121,9 @@ class DetectionEngine:
                     if sum(comp) >= 52 else None)
         except Exception as e:
             edge = None
-            if not self._ev_error_logged:
-                self._ev_error_logged = True
-                self.log(f"Pre-deal EV error: {type(e).__name__}: {e}")
+            self._log_ev_error(("predeal", sig),
+                               f"Pre-deal EV error ({sum(per_rank.values())} "
+                               f"cards seen): {e!r}")
         with self._advice_lock:
             self._predeal = {"edge": edge, "sig": sig}
             self._predeal_pending = False
@@ -932,25 +1161,45 @@ class DetectionEngine:
             values = ocr.interpret(texts)
         except Exception as e:
             values = {}
-            if not self._ev_error_logged:
-                self._ev_error_logged = True
-                self.log(f"OCR error: {type(e).__name__}: {e}")
+            self._log_ev_error(("ocr", tuple(sorted(crops))),
+                               f"OCR error reading {sorted(crops)}: {e!r}")
         finally:
             self._ocr_pending = False
         if not values:
             return
+        self._apply_ocr_values(values)
 
+    def _apply_ocr_values(self, values):
+        """Apply interpreted OCR readings to the live state (split out of
+        _ocr_job so tests can exercise it without an OCR backend)."""
         balance = values.get("balance")
-        if (balance and constants.OCR.get("sync_bankroll")
-                and abs(balance - constants.BETTING["bankroll"]) >= 0.01):
-            constants.BETTING["bankroll"] = balance
-            self.log(f"Bankroll synced from screen: €{balance:g}")
-            self._save_settings_job()
+        if balance and constants.OCR.get("sync_bankroll"):
+            if balance > 10_000_000:
+                # Same bound the GUI enforces on manual entry — an OCR misread
+                # must not push the bankroll where its display formatting (and
+                # the bet ramp) stops making sense.
+                self.log(f"OCR balance €{balance:g} above €10,000,000 — "
+                         f"clamped (likely misread).", level="WARNING")
+                balance = 10_000_000.0
+            if abs(balance - constants.BETTING["bankroll"]) >= 0.01:
+                constants.BETTING["bankroll"] = balance
+                self.log(f"Bankroll synced from screen: €{balance:g}")
+                self._save_settings_job()
         bet = values.get("bet")
-        if bet and constants.OCR.get("sync_bet") and bet != self.bet_placed:
-            with self._lock:
-                self.bet_placed = bet
-            self.log(f"Bet placed synced from screen: €{bet:g}")
+        if bet and constants.OCR.get("sync_bet"):
+            table_max = float(constants.BETTING.get("table_max") or 0)
+            clamped = (min(max(bet, 0.0), table_max) if table_max > 0
+                       else max(bet, 0.0))
+            if clamped != bet:
+                # A legit bet can never exceed the table max — this is a
+                # misread (8.50 seen as 850), so clamp it, loudly.
+                self.log(f"OCR bet €{bet:g} outside [0, €{table_max:g}] — "
+                         f"clamped to €{clamped:g}.", level="WARNING")
+                bet = clamped
+            if bet != self.bet_placed:
+                with self._lock:
+                    self.bet_placed = bet
+                self.log(f"Bet placed synced from screen: €{bet:g}")
         self._ocr_last = {**values, "ts": time.time()}
         self.publish_snapshot()
 
@@ -962,9 +1211,9 @@ class DetectionEngine:
             result = sidebets.evaluate_all(comp52, comp10)
         except Exception as e:
             result = []
-            if not self._ev_error_logged:
-                self._ev_error_logged = True
-                self.log(f"Side-bet engine error: {type(e).__name__}: {e}")
+            self._log_ev_error(("sidebet", sig),
+                               f"Side-bet engine error ({sig[0]} cards "
+                               f"seen): {e!r}")
         with self._advice_lock:
             self._sidebet_result = (result, sig)
             self._sidebet_pending = False
@@ -974,23 +1223,28 @@ class DetectionEngine:
         """Per-hand advice for a split seat. The combined lines show both
         hands; the flat card list keeps engine order so the picker still
         addresses cards by slot."""
-        split_aces = (cards.rank_of(names[0]) == "Ace"
-                      and not constants.RULES["hit_split_aces"])
         hand_lines = {"total": [], "advice": [], "optimal": []}
+        book_actions, optimal_actions = [], []  # raw codes, H1/H2 order
         advice_color = optimal_color = constants.ACTION_COLORS["-"]
         for h in (0, 1):
             hand_names = [c["name"] for c in seat.cards if c.get("hand", 0) == h]
             if not hand_names:
                 continue
-            if split_aces and len(hand_names) >= 2:
-                action, text, color = "S", "Stand (one card)", constants.ACTION_COLORS["S"]
-                optimal, opt_color = "", constants.ACTION_COLORS["-"]
+            action, text, color = self.strategy.advice(
+                hand_names, dealer_rank, post_split=True)
+            if (cards.rank_of(hand_names[0]) == "Ace"
+                    and not constants.RULES["hit_split_aces"]):
+                # ev_engine.advise(post_split=True) still prices Hit/Double
+                # on a split-ace hand — it does not model the one-card-only
+                # rule — so an EV line here would assume illegal actions.
+                optimal, opt_color, opt_action = ("", constants.ACTION_COLORS["-"],
+                                                  None)
             else:
-                action, text, color = self.strategy.advice(
-                    hand_names, dealer_rank, post_split=True)
-                optimal, opt_color = self._optimal_advice(
+                optimal, opt_color, opt_action = self._optimal_advice(
                     hand_names, dealer_rank, ev_count["per_rank"], action,
-                    post_split=True)
+                    book=(text, color), post_split=True)
+            book_actions.append(action)
+            optimal_actions.append(opt_action)
             label = cards.describe_hand(hand_names) if hand_names else "—"
             hand_lines["total"].append(f"H{h + 1}: {label}")
             if text:
@@ -1015,8 +1269,10 @@ class DetectionEngine:
             "total": "  ·  ".join(hand_lines["total"]),
             "advice": "\n".join(hand_lines["advice"]),
             "advice_color": advice_color,
+            "book_action": book_actions,
             "optimal": "\n".join(hand_lines["optimal"]),
             "optimal_color": optimal_color,
+            "optimal_action": optimal_actions,
             "index_advice": "",
             "index_color": constants.ACTION_COLORS["-"],
         }
@@ -1068,8 +1324,9 @@ class DetectionEngine:
                         seat, names, dealer_rank, ev_count, count["true"]))
                     continue
                 action, text, color = self.strategy.advice(names, dealer_rank)
-                optimal, optimal_color = self._optimal_advice(
-                    names, dealer_rank, ev_count["per_rank"], action)
+                optimal, optimal_color, optimal_action = self._optimal_advice(
+                    names, dealer_rank, ev_count["per_rank"], action,
+                    book=(text, color))
                 if (insurance is not None and not optimal and len(names) == 2
                         and cards.hand_value(names) == 21):
                     # Natural blackjack vs an ace: the even-money decision.
@@ -1095,11 +1352,19 @@ class DetectionEngine:
                     "total": cards.describe_hand(names),
                     "advice": text,
                     "advice_color": color,
+                    "book_action": action,
                     "optimal": optimal,
                     "optimal_color": optimal_color,
+                    "optimal_action": optimal_action,
                     "index_advice": index_text,
                     "index_color": index_color,
                 })
+            suggestion = betting.suggest(count["true"],
+                                         exact_edge=self._predeal_edge(ev_count))
+            if suggestion["capped"]:
+                # Latch only — _reset_round_state turns the many snapshots a
+                # round publishes into a single bet_capped_rounds tick.
+                self._bet_was_capped = True
             snapshot = {
                 "seq": 0,
                 "seats": seats,
@@ -1108,19 +1373,23 @@ class DetectionEngine:
                 "insurance": insurance,
                 "side_bets": self._side_bet_evs(ev_count),
                 "count": count,
-                "bet": (suggestion := betting.suggest(
-                    count["true"], exact_edge=self._predeal_edge(ev_count)))["text"],
+                "bet": suggestion["text"],
                 "bet_behind": self._bet_behind_text(suggestion["edge"]),
                 "edge_exact": self._predeal["edge"],
                 "bet_placed": self.bet_placed,
+                "bet_capped_rounds": self.bet_capped_rounds,
                 "session_pnl": dict(self.session_pnl),
                 "ocr": dict(self._ocr_last) if self._ocr_regions else None,
                 "round": self.round_number,
                 "cutting_card_seen": self.cutting_card_seen,
+                "reshuffle_badge": (self.cutting_card_seen
+                                    and not self._reshuffle_dismissed),
+                "paytable_changed_midshoe": self.paytable_changed_midshoe,
                 "activity": self._last_activity,
                 "metrics": dict(self._metrics),
                 "backend": self.provider.backend_name,
                 "error": self.last_error,
+                "model_refresh_ts": self._model_refresh_ts,
             }
             # Publish while still holding the state lock so a snapshot built
             # from older state can never be stored with a newer seq.

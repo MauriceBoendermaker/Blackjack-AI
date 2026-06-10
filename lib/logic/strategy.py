@@ -27,11 +27,20 @@ class StrategyAdvisor:
         action_code is the raw CSV code ('H', 'S', 'D/H', ...) or None when no
         advice applies (no cards / unknown dealer / hand not in table).
         `post_split` hands can't resplit, so a new pair uses its total row,
-        and a two-card 21 is just 21 — not a blackjack.
+        and a two-card 21 is just 21 — not a blackjack. The first card of a
+        post-split hand is the original split card (engine ordering): an ace
+        there means split aces, which stand on their one drawn card unless
+        the rules allow hitting them.
         """
         hand = [c for c in player_cards if c and c != "-"]
         if len(hand) < 2:
             return None, "", constants.ACTION_COLORS["-"]
+
+        if (post_split and cards.rank_of(hand[0]) == "Ace"
+                and not constants.RULES["hit_split_aces"]):
+            # Split aces receive exactly one card each: the hand is complete
+            # and Stand is the only legal action, whatever the total.
+            return "S", "Stand (one card)", constants.ACTION_COLORS["S"]
 
         total = cards.hand_value(hand)
         if total > 21:

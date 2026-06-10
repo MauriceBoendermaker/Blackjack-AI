@@ -51,6 +51,10 @@ API_UPLOAD_MAX_WIDTH = 1280
 # card only exists in the rank model, so it is still checked every Nth cycle.
 DEALER_USE_PLAYER_MODEL = False
 CUTTING_CARD_CHECK_EVERY = 5
+# Cutting-card sightings on consecutive checked frames (position-quantized,
+# like dealer hits) before the reshuffle flag latches — one misread must not
+# flag the whole shoe.
+CUTTING_CARD_CONFIRM_FRAMES = 3
 
 # Active-learning capture (V2 Feature 6): save labeled crops of corrections,
 # sampled confirmed locks, and confirmation-flapping detections to
@@ -88,6 +92,13 @@ CYCLE_SLEEP_DEALING = 0.4
 CYCLE_SLEEP_COMPLETE = 1.0
 CYCLE_SLEEP_WAITING = 1.2
 
+# A gap between worker cycles longer than this means the machine slept or the
+# process was suspended — hosted model sessions are refreshed before reuse,
+# retried with exponential backoff (HEALTH_CHECK_BACKOFF_BASE * 2**attempt s).
+IDLE_REFRESH_GAP_S = 30.0
+HEALTH_CHECK_RETRY_COUNT = 3
+HEALTH_CHECK_BACKOFF_BASE = 0.5
+
 # Mean absolute pixel difference (0-255 scale, on a small grayscale thumbnail)
 # below which the frame is considered unchanged and inference is skipped.
 FRAME_DIFF_THRESHOLD = 2.0
@@ -103,9 +114,17 @@ EXTRA_CARD_CONFIRM_CYCLES = 2
 # Dealer card must agree across this many consecutive frames to lock.
 DEALER_CONFIRM_FRAMES = 2
 MAX_CARDS_PER_SEAT = 6
+# A completed round auto-advances only after this many consecutive empty
+# player frames, with the dealer area clear for the same stretch — a brief
+# stream hiccup must never wipe a live round.
+EMPTY_FRAMES_FOR_RESET = 5
 
 # How often the GUI polls the engine for a fresh snapshot (ms).
 SNAPSHOT_POLL_MS = 120
+
+# An EV advice job still pending after this many seconds falls back to the
+# book play ("{book} (book — EV delayed)") until the exact result lands.
+EV_ADVICE_TIMEOUT_S = 3.0
 
 # ---------------------------------------------------------------------------
 # Game rules

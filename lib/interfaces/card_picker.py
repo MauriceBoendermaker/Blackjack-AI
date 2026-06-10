@@ -6,11 +6,26 @@ from ..common import constants
 
 C = constants.COLORS
 
+_SUIT_SYMBOLS = {"Spades": "♠", "Hearts": "♥", "Diamonds": "♦", "Clubs": "♣"}
+
+
+def _compact(name):
+    """'King of Hearts' -> 'K♥' for the hand-selector labels."""
+    rank, _, suit = str(name).partition(" of ")
+    short = rank if rank.isdigit() else rank[:1]
+    return short + _SUIT_SYMBOLS.get(suit, "")
+
 
 class CardPicker(tk.Toplevel):
-    """Calls on_select(card_name) — or on_select(None) for 'remove card'."""
+    """Calls on_select(card_name) — or on_select(None) for 'remove card'.
 
-    def __init__(self, parent, title, image_lookup, on_select, allow_remove=True):
+    With `split_info` ({"is_split": True, "hands": [[h0 names], [h1 names]]})
+    a Hand 1 / Hand 2 selector appears and the callback becomes
+    on_select(card_name, hand_idx) instead; without it the single-argument
+    callback is preserved."""
+
+    def __init__(self, parent, title, image_lookup, on_select, allow_remove=True,
+                 split_info=None):
         super().__init__(parent)
         self.title(title)
         self.configure(bg=C["bg_primary"])
@@ -18,15 +33,38 @@ class CardPicker(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self._on_select = on_select
+        self._hand_var = None
 
         header = tk.Label(self, text=title, font=constants.FONT_SECTION,
                           bg=C["bg_primary"], fg=C["text_primary"])
         header.pack(pady=(14, 8))
 
+        if split_info and split_info.get("is_split"):
+            hands = (split_info.get("hands") or [[], []])[:2]
+            while len(hands) < 2:
+                hands.append([])
+            # Default to the shorter hand — the one most likely owed a card.
+            self._hand_var = tk.IntVar(
+                value=0 if len(hands[0]) <= len(hands[1]) else 1)
+            hand_row = tk.Frame(self, bg=C["bg_primary"])
+            hand_row.pack(fill=tk.X, padx=14, pady=(0, 6))
+            tk.Label(hand_row, text="Add to:", font=constants.FONT_BODY,
+                     bg=C["bg_primary"], fg=C["text_secondary"]
+                     ).pack(side=tk.LEFT, padx=(0, 8))
+            for h, hand in enumerate(hands):
+                cards_text = " ".join(_compact(n) for n in hand) or "empty"
+                tk.Radiobutton(hand_row, text=f"Hand {h + 1} — {cards_text}",
+                               variable=self._hand_var, value=h,
+                               font=constants.FONT_BODY, bg=C["bg_primary"],
+                               fg=C["text_primary"], selectcolor=C["bg_secondary"],
+                               activebackground=C["bg_primary"],
+                               activeforeground=C["text_primary"]
+                               ).pack(side=tk.LEFT, padx=4)
+
         grid = tk.Frame(self, bg=C["bg_primary"])
         grid.pack(padx=14, pady=4)
 
-        suit_symbols = {"Spades": "♠", "Hearts": "♥", "Diamonds": "♦", "Clubs": "♣"}
+        suit_symbols = _SUIT_SYMBOLS
         for row, suit in enumerate(constants.CARD_SUITS):
             color = C["danger"] if suit in ("Hearts", "Diamonds") else C["text_primary"]
             tk.Label(grid, text=f"{suit_symbols[suit]}", font=(constants.FONT_FAMILY, 14, "bold"),
@@ -56,5 +94,10 @@ class CardPicker(tk.Toplevel):
         self.geometry(f"+{max(0, x)}+{max(0, y)}")
 
     def _choose(self, name):
+        # Read the selector before destroy so the variable is still live.
+        hand_idx = self._hand_var.get() if self._hand_var is not None else None
         self.destroy()
-        self._on_select(name)
+        if hand_idx is not None:
+            self._on_select(name, hand_idx)
+        else:
+            self._on_select(name)

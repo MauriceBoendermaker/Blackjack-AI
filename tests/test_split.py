@@ -12,7 +12,9 @@ from lib.logic.strategy import StrategyAdvisor
 
 def _engine():
     from lib.logic.engine import DetectionEngine
-    return DetectionEngine(log=lambda *a, **k: None)
+    eng = DetectionEngine(log=lambda *a, **k: None)
+    eng.store = None  # no DB writes from tests
+    return eng
 
 
 class PostSplitEv(unittest.TestCase):
