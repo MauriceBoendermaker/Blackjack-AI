@@ -187,7 +187,8 @@ class ModernBlackjackGUI(tk.Tk):
         self.info_vars = {}
         for key, label in [("round", "Round"), ("running", "Running count"),
                            ("true", "True count"), ("decks", "Decks remaining"),
-                           ("seen", "Cards seen"), ("bet", "Bet hint")]:
+                           ("seen", "Cards seen"), ("bet", "Bet hint"),
+                           ("pnl", "Session P&L")]:
             row = tk.Frame(section, bg=C["bg_secondary"])
             row.pack(fill=tk.X, pady=2)
             tk.Label(row, text=label, font=constants.FONT_BODY, width=14, anchor="w",
@@ -210,6 +211,25 @@ class ModernBlackjackGUI(tk.Tk):
         entry.pack(side=tk.LEFT)
         entry.bind("<Return>", lambda e: self._set_bankroll())
         entry.bind("<FocusOut>", lambda e: self._set_bankroll())
+
+        # The bet actually placed per owned seat — settlement converts the
+        # round's units into euros with this (defaults to the base bet).
+        row = tk.Frame(section, bg=C["bg_secondary"])
+        row.pack(fill=tk.X, pady=2)
+        tk.Label(row, text="Bet placed (€)", font=constants.FONT_BODY, width=14,
+                 anchor="w", bg=C["bg_secondary"], fg=C["text_secondary"]
+                 ).pack(side=tk.LEFT)
+        self.bet_placed_var = tk.StringVar(value=f"{constants.BASE_BET:g}")
+        bet_entry = tk.Entry(row, textvariable=self.bet_placed_var, width=10,
+                             font=constants.FONT_BODY_BOLD)
+        bet_entry.pack(side=tk.LEFT)
+        bet_entry.bind("<Return>", lambda e: self._set_bet_placed())
+        bet_entry.bind("<FocusOut>", lambda e: self._set_bet_placed())
+        tk.Label(section, text="Click a seat's name on the table to mark it as"
+                               " yours — only owned seats settle into the P&L.",
+                 font=constants.FONT_SMALL, bg=C["bg_secondary"],
+                 fg=C["text_secondary"], wraplength=240, justify="left"
+                 ).pack(anchor="w", pady=(4, 0))
 
     def _build_sidebets_section(self, parent):
         """Live pre-deal EV per enabled side bet; green when the bet is +EV.
@@ -237,7 +257,7 @@ class ModernBlackjackGUI(tk.Tk):
         wrapper.rowconfigure(0, weight=1)
         wrapper.columnconfigure(0, weight=1)
         self.table = TableView(wrapper, self._on_card_click, self._on_dealer_click,
-                               self._on_split_click)
+                               self._on_split_click, self._on_seat_name_click)
         self.table.canvas.grid(row=0, column=0, sticky="nsew")
 
     def _build_status_bar(self):
@@ -403,6 +423,12 @@ class ModernBlackjackGUI(tk.Tk):
         self.info_vars["decks"].set(f"{count['decks_remaining']:.1f}")
         self.info_vars["seen"].set(str(count["cards_seen"]))
         self.info_vars["bet"].set(snap["bet"])
+        pnl = snap.get("session_pnl") or {}
+        if pnl.get("rounds"):
+            self.info_vars["pnl"].set(
+                f"€{pnl['eur']:+.2f} ({pnl['units']:+g}u, {pnl['rounds']} rounds)")
+        else:
+            self.info_vars["pnl"].set("— mark a seat as yours")
 
         live = {item["key"]: item for item in snap.get("side_bets", [])}
         for key, (row, var, lbl) in self.sidebet_rows.items():
@@ -444,6 +470,18 @@ class ModernBlackjackGUI(tk.Tk):
 
     def _on_split_click(self, seat_idx, currently_split):
         self.controller.engine.set_split(seat_idx, not currently_split)
+
+    def _on_seat_name_click(self, seat_idx):
+        self.controller.engine.set_my_seat(seat_idx)
+
+    def _set_bet_placed(self):
+        try:
+            value = float(self.bet_placed_var.get().replace(",", "."))
+        except ValueError:
+            self.bet_placed_var.set(f"{self.controller.engine.bet_placed:g}")
+            return
+        if value >= 0:
+            self.controller.engine.set_bet_placed(value)
 
     def _open_stats(self):
         store = self.controller.engine.store

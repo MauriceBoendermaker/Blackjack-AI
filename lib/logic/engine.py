@@ -26,6 +26,7 @@ from . import betting
 from . import cards
 from . import deviations
 from . import ev_engine
+from . import settlement
 from . import shoe
 from . import sidebets
 from .counting import CardCounter, counter_key
@@ -71,6 +72,9 @@ class DetectionEngine:
         self._pending_dealer = {}        # (rank, qx, qy) -> consecutive sightings
         self.round_number = 1
         self.cutting_card_seen = False
+        self.my_seats = set()            # seat indices whose P&L the user tracks
+        self.bet_placed = float(constants.BASE_BET)  # EUR per owned seat this round
+        self.session_pnl = {"units": 0.0, "eur": 0.0, "rounds": 0}
 
         self.regions = None
         self._dealer_rect = None
@@ -408,12 +412,14 @@ class DetectionEngine:
         self._reset_round_state()
 
     def _reset_round_state(self):
-        # Persist the round that just ended (and the shoe state, so a restart
-        # mid-shoe doesn't lose the count) before wiping the table.
-        if self.store is not None:
-            snap = self.get_snapshot()
-            if snap and (snap["dealer"]["card"]
-                         or any(s["cards"] for s in snap["seats"])):
+        # Settle and persist the round that just ended (and the shoe state, so
+        # a restart mid-shoe doesn't lose the count) before wiping the table.
+        snap = self.get_snapshot()
+        if snap and (snap["dealer"]["card"]
+                     or any(s["cards"] for s in snap["seats"])):
+            settle = self._settle_round(snap)
+            snap = {**snap, "settlement": settle, "bet_placed": self.bet_placed}
+            if self.store is not None:
                 self._advice_pool.submit(
                     self._persist_round_job, snap, self.counter.get_state(),
                     self.round_number, self.cutting_card_seen)
@@ -532,6 +538,52 @@ class DetectionEngine:
         self.counter.adjust_manual(rank_key, delta)
         self.publish_snapshot()
 
+    def _settle_round(self, snap):
+        """Settle the ending round and roll owned-seat results into the
+        session P&L / bankroll. Returns the settlement dict (or None when the
+        dealer hand was incomplete — then nothing is booked)."""
+        try:
+            settle = settlement.settle_round(
+                snap["seats"], snap["dealer"]["card"],
+                snap["dealer"].get("extras", []))
+        except Exception as e:
+            self.log(f"Settlement error: {type(e).__name__}: {e}")
+            return None
+        if settle is None:
+            if snap["dealer"]["card"]:
+                self.log(f"Round {self.round_number} not settled — "
+                         "dealer hand incomplete.")
+            return None
+
+        parts = [f"P{s['index'] + 1} {s['net_units']:+g}u" for s in settle["seats"]]
+        bj = " BJ" if settle["dealer_bj"] else ""
+        self.log(f"Round {self.round_number} settled (dealer {settle['dealer_total']}{bj}): "
+                 + ", ".join(parts))
+
+        mine = [s for s in settle["seats"] if s["index"] in self.my_seats]
+        if mine:
+            units = sum(s["net_units"] for s in mine)
+            eur = units * self.bet_placed
+            self.session_pnl["units"] += units
+            self.session_pnl["eur"] += eur
+            self.session_pnl["rounds"] += 1
+            settle["my_units"] = units
+            settle["my_eur"] = eur
+            if constants.BETTING.get("auto_bankroll") and eur:
+                constants.BETTING["bankroll"] = max(0.0, constants.BETTING["bankroll"] + eur)
+                self.log(f"Bankroll {eur:+.2f} EUR -> {constants.BETTING['bankroll']:g} "
+                         "(auto-settled)")
+                self._advice_pool.submit(self._save_settings_job)
+        return settle
+
+    @staticmethod
+    def _save_settings_job():
+        try:
+            from ..common import settings
+            settings.save()
+        except Exception:
+            pass
+
     def _persist_round_job(self, snap, counter_state, round_number, cutting):
         try:
             self.store.record_round(snap)
@@ -557,6 +609,24 @@ class DetectionEngine:
         self.log(f"Shoe restored — round {self.round_number}, "
                  f"{self.counter.cards_seen} cards seen, "
                  f"running count {self.counter.running_count:+d}.")
+        self.publish_snapshot()
+
+    def set_my_seat(self, seat_idx, mine=None):
+        """Toggle (or set) whether a seat's results count toward the session
+        P&L and the bankroll auto-update."""
+        with self._lock:
+            if mine is None:
+                mine = seat_idx not in self.my_seats
+            if mine:
+                self.my_seats.add(seat_idx)
+            else:
+                self.my_seats.discard(seat_idx)
+        self.log(f"P{seat_idx + 1} {'is now tracked as yours' if mine else 'untracked'}.")
+        self.publish_snapshot()
+
+    def set_bet_placed(self, eur):
+        with self._lock:
+            self.bet_placed = max(0.0, float(eur))
         self.publish_snapshot()
 
     def refresh_settings(self):
@@ -751,6 +821,7 @@ class DetectionEngine:
             "manual": [c["manual"] for c in seat.cards],
             "hand_of": [c.get("hand", 0) for c in seat.cards],
             "split": True,
+            "mine": seat.index in self.my_seats,
             "can_split": False,
             "total": "  ·  ".join(hand_lines["total"]),
             "advice": "\n".join(hand_lines["advice"]),
@@ -811,6 +882,7 @@ class DetectionEngine:
                     "manual": [c["manual"] for c in seat.cards],
                     "hand_of": [c.get("hand", 0) for c in seat.cards],
                     "split": False,
+                    "mine": seat.index in self.my_seats,
                     "can_split": (len(names) == 2 and cards.is_pair(names)
                                   and cards.hand_value(names) < 21),
                     "total": cards.describe_hand(names),
@@ -830,6 +902,8 @@ class DetectionEngine:
                 "side_bets": self._side_bet_evs(ev_count),
                 "count": count,
                 "bet": betting.suggest(count["true"])["text"],
+                "bet_placed": self.bet_placed,
+                "session_pnl": dict(self.session_pnl),
                 "round": self.round_number,
                 "cutting_card_seen": self.cutting_card_seen,
                 "activity": self._last_activity,

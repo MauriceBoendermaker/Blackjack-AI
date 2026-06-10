@@ -124,6 +124,7 @@ BETTING = {
     "variance": 1.33,        # per-hand variance in squared units
     "table_min": 10,
     "table_max": 5000,       # 0 = no max
+    "auto_bankroll": 1,      # settle owned seats into the bankroll (1/0)
 }
 
 # Side bets offered by the table and their paytables (X means pays X:1).

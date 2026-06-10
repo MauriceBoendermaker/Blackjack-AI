@@ -17,10 +17,12 @@ C = constants.COLORS
 
 
 class TableView:
-    def __init__(self, parent, on_card_click, on_dealer_click, on_split_click=None):
+    def __init__(self, parent, on_card_click, on_dealer_click, on_split_click=None,
+                 on_seat_name_click=None):
         self.on_card_click = on_card_click
         self.on_dealer_click = on_dealer_click
         self.on_split_click = on_split_click or (lambda *a: None)
+        self.on_seat_name_click = on_seat_name_click or (lambda *a: None)
 
         self.canvas = tk.Canvas(parent, bg=C["bg_canvas"], highlightthickness=0)
         self._image_cache = {}
@@ -42,12 +44,16 @@ class TableView:
         self._dealer_rendered = "__none__"
 
         self.seats = []
+        self._make_seats()
+        self.canvas.bind("<Configure>", self._on_resize)
+
+    def _make_seats(self):
         for i in range(constants.NUM_SEATS):
             self.seats.append({
                 "cards": [],          # list of tk.Label, created on demand
                 "rendered": [],       # last rendered card names per label
                 "name": tk.Label(self.canvas, text=f"Player {i + 1}", font=constants.FONT_SMALL,
-                                 bg=C["bg_canvas"], fg=C["text_on_felt"]),
+                                 bg=C["bg_canvas"], fg=C["text_on_felt"], cursor="hand2"),
                 "total": tk.Label(self.canvas, text="", font=constants.FONT_BODY_BOLD,
                                   bg=C["bg_canvas"], fg=C["text_on_felt"]),
                 "advice": tk.Label(self.canvas, text="", font=constants.FONT_BODY_BOLD,
@@ -64,8 +70,8 @@ class TableView:
                 "is_split": False,
                 "pos": (0, 0),
             })
-
-        self.canvas.bind("<Configure>", self._on_resize)
+            self.seats[i]["name"].bind(
+                "<Button-1>", lambda e, s=i: self.on_seat_name_click(s))
 
     # ----------------------------------------------------------------- images
 
@@ -234,6 +240,10 @@ class TableView:
 
         if seat["total"].cget("text") != snap["total"]:
             seat["total"].config(text=snap["total"])
+        name_text = f"Player {i + 1}" + (" ★" if snap.get("mine") else "")
+        if seat["name"].cget("text") != name_text:
+            seat["name"].config(text=name_text,
+                                fg=C["warning"] if snap.get("mine") else C["text_on_felt"])
         advice, color = snap["advice"], snap["advice_color"]
         if seat["advice"].cget("text") != advice or seat["advice"].cget("fg") != color:
             seat["advice"].config(text=advice, fg=color)

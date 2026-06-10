@@ -9,6 +9,10 @@ from ..common import constants
 C = constants.COLORS
 
 _ROWS = [
+    ("net_eur", "Net P&L (€, owned seats)"),
+    ("net_units", "Net P&L (units)"),
+    ("win_rate", "Hand win rate (excl. pushes)"),
+    ("settled_rounds", "Rounds settled"),
     ("rounds", "Rounds recorded"),
     ("avg_tc", "Average true count"),
     ("max_tc", "Best true count"),
@@ -73,7 +77,12 @@ class StatsWindow(tk.Toplevel):
             return
         for key, var in self._vars.items():
             value = stats.get(key, 0)
-            var.set(f"{value:+.2f}" if isinstance(value, float) else str(value))
+            if key == "win_rate":
+                var.set(f"{value * 100:.1f}%")
+            elif isinstance(value, float):
+                var.set(f"{value:+.2f}")
+            else:
+                var.set(str(value))
 
     def _export(self):
         path = filedialog.asksaveasfilename(

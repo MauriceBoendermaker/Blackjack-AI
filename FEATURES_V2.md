@@ -14,7 +14,18 @@ makes the detection stack self-improving.
 
 ---
 
-## 1. Automatic round settlement & true P&L ⭐ (the keystone)
+## 1. ✅ DONE — Automatic round settlement & true P&L ⭐ (the keystone)
+
+> **Shipped 2026-06-10.** `lib/logic/settlement.py` settles every hand at round
+> end against the dealer's reconstructed final total (naturals 3:2, split hands
+> per hand, dealer BJ, busts); a round only settles when the dealer hand is
+> complete (total ≥ 17 or all hands bust) — otherwise nothing is booked. Click
+> a seat's name (★) to mark it yours: owned seats roll into the Session P&L
+> row and auto-update the bankroll via the new "Bet placed (€)" field
+> (`BETTING["auto_bankroll"]` toggle). Settlement, per-round P&L, and bet are
+> persisted (schema auto-migrates); stats window shows net €/units, win rate,
+> settled rounds. Tests: `tests/test_settlement.py` (8 cases incl. engine
+> integration with dealer playout).
 
 **What:** When the dealer's playout completes (no new dealer cards for ~2
 cycles after players act), compute the dealer's final total from
