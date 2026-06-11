@@ -8,6 +8,7 @@ ever touched from the worker thread.
 """
 
 import threading
+import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -444,6 +445,10 @@ class ModernBlackjackGUI(tk.Tk):
                                self._on_split_click, self._on_seat_name_click,
                                self._on_dealer_extra_click)
         self.table.canvas.grid(row=0, column=0, sticky="nsew")
+        # Clicking the felt parks keyboard focus back on the window — an
+        # Entry otherwise keeps focus for the whole session after one click
+        # (labels/canvas never take it), which froze the money-entry sync.
+        self.table.canvas.bind("<Button-1>", lambda e: self.focus_set(), add="+")
 
     def _build_status_bar(self):
         bar = tk.Frame(self, bg=C["bg_secondary"],
@@ -758,33 +763,61 @@ class ModernBlackjackGUI(tk.Tk):
         m = snap["metrics"]
         if self.controller.running and m["cycle_ms"]:
             skipped = " · idle (frame unchanged)" if m["skipped"] else ""
-            self.metrics_var.set(
-                f"{snap['backend']} · cycle {m['cycle_ms']:.0f} ms"
-                f" · inference {m['inference_ms']:.0f} ms{skipped}")
+            text = (f"{snap['backend']} · cycle {m['cycle_ms']:.0f} ms"
+                    f" · inference {m['inference_ms']:.0f} ms{skipped}")
+            # OCR liveness: makes "the bankroll isn't updating" diagnosable
+            # at a glance — off (no regions for this monitor), waiting
+            # (enabled but nothing read yet), or seconds since last read.
+            if constants.OCR.get("enabled"):
+                ocr_info = snap.get("ocr")
+                if ocr_info is None:
+                    text += " · OCR off"
+                elif ocr_info.get("ts"):
+                    text += f" · OCR {max(0.0, time.time() - ocr_info['ts']):.0f}s"
+                else:
+                    text += " · OCR waiting"
+            self.metrics_var.set(text)
         elif not self.controller.running:
             self.metrics_var.set("")
 
     def _sync_money_entries(self, snap):
         """Reflect engine-side bankroll / bet-placed (OCR sync, auto-settle)
-        into the sidebar entries without fighting the user: skip whichever
-        entry holds keyboard focus, and write only when the engine value
-        moved since the last sync so a manual edit is never clobbered by an
-        unchanged engine value. Setting a StringVar on an unfocused Entry
-        fires no FocusOut, so this can't loop through the commit handlers."""
-        try:
-            focused = self.focus_get()
-        except (KeyError, tk.TclError):  # combobox popdowns confuse focus_get
-            focused = None
+        into the sidebar entries without fighting the user: skip an entry
+        only while it is ACTIVELY being edited, and write only when the
+        engine value moved since the last sync so a manual edit is never
+        clobbered by an unchanged engine value. Setting a StringVar on an
+        Entry fires no FocusOut, so this can't loop the commit handlers."""
         bankroll = snap.get("bankroll")
         if (bankroll is not None and bankroll != self._synced_bankroll
-                and focused is not self.bankroll_entry):
+                and not self._entry_editing(self.bankroll_entry,
+                                            self.bankroll_var,
+                                            self._synced_bankroll)):
             self._synced_bankroll = bankroll
             self.bankroll_var.set(f"{bankroll:.10g}")
         bet = snap.get("bet_placed")
         if (bet is not None and bet != self._synced_bet
-                and focused is not self.bet_entry):
+                and not self._entry_editing(self.bet_entry,
+                                            self.bet_placed_var,
+                                            self._synced_bet)):
             self._synced_bet = bet
             self.bet_placed_var.set(f"{bet:.10g}")
+
+    def _entry_editing(self, entry, var, committed):
+        """True only while the user is actively typing in the entry: it has
+        keyboard focus AND its text no longer parses to the committed value.
+        Focus alone must not block the sync — one click into an entry parks
+        keyboard focus there for the rest of the session (canvas/labels
+        never reclaim it), which froze the OCR sync the moment the user
+        ever touched the field."""
+        try:
+            if self.focus_get() is not entry:
+                return False
+        except (KeyError, tk.TclError):  # combobox popdowns confuse focus_get
+            return False
+        try:
+            return float(var.get().replace(",", ".")) != committed
+        except ValueError:
+            return True  # mid-edit text ("", "12.") — definitely typing
 
     def _open_settings(self):
         from .settings_dialog import SettingsDialog
