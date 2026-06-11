@@ -17,6 +17,7 @@ from ..common import constants
 from ..logic.background import DetectionController
 from ..logic.counting import COUNTER_KEYS
 from ..logic.region_preview import build_region_preview
+from . import scaling
 from .card_picker import CardPicker
 from .table_view import TableView
 from .tooltip import ToolTip
@@ -28,9 +29,13 @@ C = constants.COLORS
 class ModernBlackjackGUI(tk.Tk):
     def __init__(self, log_manager=None):
         super().__init__()
+        # Scaling first: every widget below picks up the live FONT_* objects
+        # and px() sizes resolved for this monitor's DPI.
+        scaling.init(self)
         self.title(constants.TITLE)
-        self.geometry("1500x950")
-        self.minsize(1150, 760)
+        width, height = self._initial_geometry()
+        self.geometry(f"{width}x{height}")
+        self.minsize(min(scaling.px(1150), width), min(scaling.px(760), height))
         self.configure(bg=C["bg_primary"])
 
         self.log_manager = log_manager
@@ -42,13 +47,19 @@ class ModernBlackjackGUI(tk.Tk):
         self._last_seq = -1
         self._preview_busy = False
 
-        self.columnconfigure(0, weight=0, minsize=300)
+        # Row 0 nav bar, row 1 sidebar + table (the stretchy row), row 2 status.
+        self.columnconfigure(0, weight=0, minsize=scaling.px(340))
         self.columnconfigure(1, weight=1)
-        self.rowconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
 
+        self._build_nav_bar()
         self._build_left_panel()
         self._build_table()
         self._build_status_bar()
+        scaling.watch(self)
+        # Fonts and the table rescale themselves on a DPI change; the fixed
+        # px() chrome (sidebar width, nav height, minsize) must follow too.
+        scaling.on_change(self._apply_chrome_scale)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(constants.SNAPSHOT_POLL_MS, self._poll_snapshot)
@@ -57,23 +68,110 @@ class ModernBlackjackGUI(tk.Tk):
         self.after(600, self._maybe_restore_shoe)
         self.set_status("Ready — confirm a monitor, then press Start Detection.")
 
+    def _apply_chrome_scale(self):
+        """Re-apply the fixed px() dimensions after a DPI rescale (monitor
+        move or a settings override) — fonts and the table already updated."""
+        self.columnconfigure(0, minsize=scaling.px(340))
+        self._sidebar_canvas.config(width=scaling.px(320))
+        self.nav_bar.config(height=scaling.px(42))
+        width, height = self._initial_geometry()
+        self.minsize(min(scaling.px(1150), width), min(scaling.px(760), height))
+        ttk.Style(self).configure("Dark.Vertical.TScrollbar",
+                                  width=scaling.px(10))
+
+    def _initial_geometry(self):
+        """The 1500x950 design size scaled for this monitor's DPI, clamped to
+        ~92% of the monitor so the window never opens larger than the screen."""
+        try:
+            monitors = screeninfo.get_monitors()
+            mon = next((m for m in monitors if getattr(m, "is_primary", False)),
+                       monitors[0])
+            max_w, max_h = int(mon.width * 0.92), int(mon.height * 0.92)
+        except Exception:
+            max_w, max_h = scaling.px(1500), scaling.px(950)
+        return min(scaling.px(1500), max_w), min(scaling.px(950), max_h)
+
+    # -------------------------------------------------------------- nav bar
+
+    def _build_nav_bar(self):
+        """Top bar: app name + version left, window-opening buttons right.
+        Trims the sidebar to table actions only, so it rarely needs to scroll."""
+        nav = tk.Frame(self, bg=C["bg_secondary"], height=scaling.px(42))
+        nav.grid(row=0, column=0, columnspan=2, sticky="ew")
+        nav.pack_propagate(False)
+        # 1px bottom border (highlightthickness would also frame the sides).
+        tk.Frame(nav, bg=C["border"], height=1).pack(side=tk.BOTTOM, fill=tk.X)
+        self.nav_bar = nav
+
+        tk.Label(nav, text="Blackjack AI", font=constants.FONT_SECTION,
+                 bg=C["bg_secondary"], fg=C["text_primary"]
+                 ).pack(side=tk.LEFT, padx=(14, 4))
+        tk.Label(nav, text=f"v{constants.VERSION}", font=constants.FONT_SMALL,
+                 bg=C["bg_secondary"], fg=C["text_secondary"]).pack(side=tk.LEFT)
+
+        # Reversed so side=RIGHT packing shows them left-to-right as listed.
+        for text, command, tooltip in reversed([
+            ("🗒  Logs", self._open_logs, "Open the live log window"),
+            ("📊  Stats", self._open_stats,
+             "Round history, count distribution, CSV export"),
+            ("🛡  Bankroll", self._open_bankroll,
+             "Risk of ruin, Kelly risk table, Monte Carlo simulation"),
+            ("🎓  Trainer", self._open_trainer,
+             "Deck countdown, deviation flashcards, replay drills"),
+            ("🎯  HUD", self._toggle_hud,
+             "Compact always-on-top panel to park next to the stream"),
+            ("⚙  Settings", self._open_settings,
+             "Table rules, deck count, side-bet paytables"),
+        ]):
+            btn = self._nav_button(nav, text, command, tooltip)
+            if command == self._toggle_hud:  # bound methods: == not `is`
+                self.hud_nav_btn = btn
+
+    def _nav_button(self, parent, text, command, tooltip):
+        btn = self._button(parent, text, command, C["bg_secondary"],
+                           fg=C["text_primary"], hover=C["bg_primary"],
+                           tooltip=tooltip)
+        btn.config(padx=scaling.px(10), pady=scaling.px(4))
+        btn.pack(side=tk.RIGHT, padx=2)
+        return btn
+
     # ------------------------------------------------------------ left panel
 
     def _build_left_panel(self):
         left = tk.Frame(self, bg=C["bg_secondary"],
                         highlightbackground=C["border"], highlightthickness=1)
-        left.grid(row=0, column=0, sticky="nsew")
+        left.grid(row=1, column=0, sticky="nsew")
 
-        tk.Label(left, text="Blackjack AI", font=constants.FONT_TITLE,
-                 bg=C["bg_secondary"], fg=C["text_primary"]).pack(pady=(18, 10))
-
-        canvas = tk.Canvas(left, bg=C["bg_secondary"], highlightthickness=0, width=280)
-        scrollbar = ttk.Scrollbar(left, orient="vertical", command=canvas.yview)
+        canvas = tk.Canvas(left, bg=C["bg_secondary"], highlightthickness=0,
+                           width=scaling.px(320))
+        self._sidebar_canvas = canvas
+        scrollbar = ttk.Scrollbar(left, orient="vertical", command=canvas.yview,
+                                  style=self._scrollbar_style())
+        canvas.configure(yscrollcommand=scrollbar.set)
         inner = tk.Frame(canvas, bg=C["bg_secondary"])
         inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
 
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(inner_id, width=e.width))
+        # Auto-hide: the scrollbar only appears while the sections overflow
+        # the canvas (re-checked whenever either side changes height).
+        def _sync_scrollbar():
+            bbox = canvas.bbox("all")
+            needed = bbox is not None and bbox[3] - bbox[1] > canvas.winfo_height()
+            if needed and not scrollbar.winfo_ismapped():
+                scrollbar.pack(side="right", fill="y")
+            elif not needed and scrollbar.winfo_ismapped():
+                scrollbar.pack_forget()
+                canvas.yview_moveto(0.0)
+
+        def _on_inner_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            _sync_scrollbar()
+
+        def _on_canvas_configure(event):
+            canvas.itemconfigure(inner_id, width=event.width)
+            _sync_scrollbar()
+
+        inner.bind("<Configure>", _on_inner_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
 
         # One global wheel binding that only acts when the pointer is over the
         # left panel (or a child of it) — no Enter/Leave toggling edge cases.
@@ -87,13 +185,37 @@ class ModernBlackjackGUI(tk.Tk):
         self.bind_all("<MouseWheel>", _wheel, add="+")
 
         canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
 
         self._build_monitor_section(inner)
         self._build_controls_section(inner)
         self._build_counters_section(inner)
         self._build_game_info_section(inner)
         self._build_sidebets_section(inner)
+
+    def _scrollbar_style(self):
+        """Arrowless flat scrollbar matching the sidebar; returns the style
+        name. The native Windows theme ignores ttk color options, so the
+        trough/thumb elements are borrowed from clam, which honors them."""
+        style = ttk.Style(self)
+        for element in ("trough", "thumb"):
+            try:
+                style.element_create(f"Dark.Vertical.Scrollbar.{element}",
+                                     "from", "clam",
+                                     f"Vertical.Scrollbar.{element}")
+            except tk.TclError:
+                pass  # second window in one interpreter: elements persist
+        style.layout("Dark.Vertical.TScrollbar", [
+            ("Dark.Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
+                ("Dark.Vertical.Scrollbar.thumb", {"expand": "1"})]})])
+        style.configure("Dark.Vertical.TScrollbar",
+                        troughcolor=C["bg_secondary"], background=C["border"],
+                        bordercolor=C["bg_secondary"],
+                        lightcolor=C["border"], darkcolor=C["border"],
+                        relief="flat", width=scaling.px(10))
+        style.map("Dark.Vertical.TScrollbar",
+                  background=[("active", C["text_secondary"]),
+                              ("pressed", C["text_secondary"])])
+        return "Dark.Vertical.TScrollbar"
 
     def _section(self, parent, title):
         frame = tk.Frame(parent, bg=C["bg_secondary"])
@@ -163,23 +285,6 @@ class ModernBlackjackGUI(tk.Tk):
             tooltip="Mark the balance / bet / result areas to read from the screen")
         self.ocr_btn.pack(fill=tk.X, pady=4)
         self.ocr_btn.config(state="disabled")
-        self._button(section, "🗒  View Logs", self._open_logs, C["text_secondary"],
-                     tooltip="Open the live log window").pack(fill=tk.X, pady=4)
-        self._button(section, "⚙  Settings", self._open_settings, C["text_secondary"],
-                     tooltip="Table rules, deck count, side-bet paytables"
-                     ).pack(fill=tk.X, pady=4)
-        self._button(section, "📊  Session Stats", self._open_stats, C["text_secondary"],
-                     tooltip="Round history, count distribution, CSV export"
-                     ).pack(fill=tk.X, pady=4)
-        self._button(section, "🛡  Bankroll & Risk", self._open_bankroll, C["text_secondary"],
-                     tooltip="Risk of ruin, Kelly risk table, Monte Carlo simulation"
-                     ).pack(fill=tk.X, pady=4)
-        self._button(section, "🎯  Overlay HUD", self._toggle_hud, C["text_secondary"],
-                     tooltip="Compact always-on-top panel to park next to the stream"
-                     ).pack(fill=tk.X, pady=4)
-        self._button(section, "🎓  Trainer", self._open_trainer, C["text_secondary"],
-                     tooltip="Deck countdown, deviation flashcards, replay drills"
-                     ).pack(fill=tk.X, pady=4)
 
     def _build_counters_section(self, parent):
         section = self._section(parent, "Cards Seen (this shoe)")
@@ -273,7 +378,7 @@ class ModernBlackjackGUI(tk.Tk):
 
     def _build_table(self):
         wrapper = tk.Frame(self, bg=C["bg_primary"])
-        wrapper.grid(row=0, column=1, sticky="nsew", padx=12, pady=12)
+        wrapper.grid(row=1, column=1, sticky="nsew", padx=12, pady=12)
         wrapper.rowconfigure(0, weight=1)
         wrapper.columnconfigure(0, weight=1)
         self.table = TableView(wrapper, self._on_card_click, self._on_dealer_click,
@@ -283,7 +388,7 @@ class ModernBlackjackGUI(tk.Tk):
     def _build_status_bar(self):
         bar = tk.Frame(self, bg=C["bg_secondary"],
                        highlightbackground=C["border"], highlightthickness=1, height=34)
-        bar.grid(row=1, column=0, columnspan=2, sticky="ew")
+        bar.grid(row=2, column=0, columnspan=2, sticky="ew")
         bar.pack_propagate(False)
         self.status_var = tk.StringVar(value="")
         tk.Label(bar, textvariable=self.status_var, font=constants.FONT_SMALL,
@@ -571,10 +676,16 @@ class ModernBlackjackGUI(tk.Tk):
             hud.close()
             return
         from .hud import OverlayHUD
-        self.hud = OverlayHUD(self, on_close=lambda: setattr(self, "hud", None))
+        self.hud = OverlayHUD(self, on_close=self._on_hud_closed)
+        self.hud_nav_btn.config(fg=C["accent"])
         snap = self.controller.engine.get_snapshot()
         if snap:
             self.hud.update_from_snapshot(snap)
+
+    def _on_hud_closed(self):
+        """Runs however the HUD goes away — drop the ref and the active tint."""
+        self.hud = None
+        self.hud_nav_btn.config(fg=C["text_primary"])
 
     def _open_trainer(self):
         existing = getattr(self, "trainer_window", None)

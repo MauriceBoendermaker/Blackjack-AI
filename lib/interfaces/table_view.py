@@ -10,10 +10,45 @@ import tkinter as tk
 
 from PIL import Image, ImageTk
 
+from . import scaling
 from ..common import constants
 from ..logic import cards as cardlib
 
 C = constants.COLORS
+
+
+def seat_positions(w, h, n, card_w, card_h):
+    """Card-top anchor points for `n` seats fanned around the dealer.
+
+    Pure (no Tk). Seat i sits at angle theta evenly spaced over
+    [-span/2, +span/2] on the LOWER arc of a circle anchored at the dealer
+    card (top centre): x = cx + R*sin(theta), y = anchor + R*cos(theta) —
+    so the middle seat is lowest and the edge seats curve up toward the
+    dealer. i=0 is the leftmost seat (Player 1). Tuning constants are
+    96-dpi pixels scaled by the card size, so DPI-scaled cards scale the
+    whole fan with them.
+    """
+    s = card_h / float(constants.CARD_RENDER_SIZE[1])
+    cx = w / 2.0
+    anchor_y = 110.0 * s  # just below the dealer card's centre
+    span = math.radians(110.0)
+    label_stack = (150.0 + 12.0) * s  # five label lines + bottom breathing room
+    # R from whichever constraint is tighter: the middle seat's label stack
+    # above the bottom edge, or the edge seats inside the side margins
+    # (40 px edge gap + half the 118 px optimal-label wraplength). Never so
+    # small that the edge seats climb into the dealer card / insurance row.
+    fit_h = h - anchor_y - card_h - label_stack
+    fit_w = (w / 2.0 - 100.0 * s) / math.sin(span / 2)
+    radius = max(min(fit_h, fit_w), 150.0 * s)
+    step = span / (n - 1) if n > 1 else 0.0
+    out = []
+    for i in range(n):
+        theta = -span / 2 + i * step
+        x = cx + radius * math.sin(theta)
+        y = anchor_y + radius * math.cos(theta)
+        y = min(y, h - card_h - label_stack)  # tiny-window safety clamp
+        out.append((x, y))
+    return out
 
 
 class TableView:
@@ -38,7 +73,7 @@ class TableView:
         self.dealer_card_lbl.bind("<Button-1>", lambda e: self.on_dealer_click())
         self.dealer_insurance = tk.Label(self.canvas, text="", font=constants.FONT_BODY_BOLD,
                                          bg=C["bg_canvas"], fg=C["text_on_felt"],
-                                         wraplength=170, justify="left")
+                                         wraplength=scaling.px(170), justify="left")
         self.dealer_playout = tk.Label(self.canvas, text="", font=constants.FONT_SMALL,
                                        bg=C["bg_canvas"], fg=C["text_on_felt"])
         self._dealer_rendered = "__none__"
@@ -46,6 +81,7 @@ class TableView:
         self.seats = []
         self._make_seats()
         self.canvas.bind("<Configure>", self._on_resize)
+        scaling.on_change(self._rescale)
 
     def _make_seats(self):
         for i in range(constants.NUM_SEATS):
@@ -60,10 +96,10 @@ class TableView:
                                    bg=C["bg_canvas"], fg=C["text_on_felt"]),
                 "optimal": tk.Label(self.canvas, text="", font=constants.FONT_SMALL,
                                     bg=C["bg_canvas"], fg=C["text_on_felt"],
-                                    wraplength=118, justify="center"),
+                                    wraplength=scaling.px(118), justify="center"),
                 "index": tk.Label(self.canvas, text="", font=constants.FONT_SMALL,
                                   bg=C["bg_canvas"], fg=C["text_on_felt"],
-                                  wraplength=118, justify="center"),
+                                  wraplength=scaling.px(118), justify="center"),
                 "add": None,          # "+" button, created lazily
                 "split_btn": None,    # Split / Undo split badge, created lazily
                 "hand_of": [],        # per-card hand tag from the snapshot
@@ -75,7 +111,9 @@ class TableView:
 
     # ----------------------------------------------------------------- images
 
-    def card_image(self, card_name, size=constants.CARD_RENDER_SIZE):
+    def card_image(self, card_name, size=None):
+        if size is None:  # resolved at call time so DPI rescales take effect
+            size = scaling.size(constants.CARD_RENDER_SIZE)
         key = (card_name, size)
         cached = self._image_cache.get(key)
         if cached is not None:
@@ -96,7 +134,7 @@ class TableView:
         end = min(_index + 4, len(names))
         for name in names[_index:end]:
             self.card_image(name)
-            self.card_image(name, constants.PICKER_CARD_SIZE)
+            self.card_image(name, scaling.size(constants.PICKER_CARD_SIZE))
         if end < len(names):
             self.canvas.after(15, lambda: self.preload_images(names, end))
 
@@ -120,64 +158,70 @@ class TableView:
             self.canvas.coords(self._preview_item, w / 2, h / 2)
             return
 
-        self.dealer_title.place(x=w / 2, y=18, anchor="n")
-        self.dealer_card_lbl.place(x=w / 2, y=46, anchor="n")
+        self.dealer_title.place(x=w / 2, y=scaling.px(18), anchor="n")
+        self.dealer_card_lbl.place(x=w / 2, y=scaling.px(46), anchor="n")
         # Beside the card, not below it — below collides with the middle
         # seat's cards on short windows.
-        card_w, card_h_d = constants.DEALER_CARD_RENDER_SIZE
+        card_w_d, card_h_d = scaling.size(constants.DEALER_CARD_RENDER_SIZE)
         self.dealer_insurance.place(
-            x=w / 2 + card_w / 2 + 14, y=46 + card_h_d / 2, anchor="w")
+            x=w / 2 + card_w_d / 2 + scaling.px(14), y=scaling.px(46) + card_h_d / 2,
+            anchor="w")
         self.dealer_playout.place(
-            x=w / 2 - card_w / 2 - 14, y=46 + card_h_d / 2, anchor="e")
+            x=w / 2 - card_w_d / 2 - scaling.px(14), y=scaling.px(46) + card_h_d / 2,
+            anchor="e")
 
-        cx = w / 2
-        cy = h + h * 0.55
-        radius = min(w * 0.44, h * 1.05)
-        span = 86
-        n = constants.NUM_SEATS
-        card_w, card_h = constants.CARD_RENDER_SIZE
+        card_w, card_h = scaling.size(constants.CARD_RENDER_SIZE)
+        positions = seat_positions(w, h, constants.NUM_SEATS, card_w, card_h)
         for i, seat in enumerate(self.seats):
-            t = i / (n - 1)
-            ang = math.radians(90 + span / 2 - t * span)  # left -> right
-            x = cx + radius * math.cos(ang)
-            y = cy - radius * math.sin(ang)
-            y = min(y, h - 150)  # keep all five label lines on screen
-            seat["pos"] = (x, y - card_h - 92)
+            seat["pos"] = positions[i]
             self._place_seat(i)
-
-        if self._preview_item is not None:
-            self.canvas.coords(self._preview_item, w / 2, h / 2)
 
     def _place_seat(self, i):
         seat = self.seats[i]
         x, top = seat["pos"]
-        card_w, card_h = constants.CARD_RENDER_SIZE
+        card_w, card_h = scaling.size(constants.CARD_RENDER_SIZE)
         hand_of = seat["hand_of"]
         split = seat["is_split"] and any(h == 1 for h in hand_of)
         depth = [0, 0]  # cards placed so far per hand (split layout)
         for j, lbl in enumerate(seat["cards"]):
             if split:
                 h = hand_of[j] if j < len(hand_of) else 0
-                col_x = x - card_w / 2 + (-40 if h == 0 else 40)
-                lbl.place(x=col_x + min(depth[h], 3) * 12, y=top + depth[h] * 26,
-                          anchor="nw")
+                col_x = x - card_w / 2 + scaling.px(-40 if h == 0 else 40)
+                lbl.place(x=col_x + min(depth[h], 3) * scaling.px(12),
+                          y=top + depth[h] * scaling.px(26), anchor="nw")
                 depth[h] += 1
             else:
-                lbl.place(x=x - card_w / 2 + min(j, 3) * 16, y=top + j * 26, anchor="nw")
+                lbl.place(x=x - card_w / 2 + min(j, 3) * scaling.px(16),
+                          y=top + j * scaling.px(26), anchor="nw")
             lbl.lift()
         n_cards = max(max(depth) if split else len(seat["cards"]), 1)
-        base_y = top + card_h + (n_cards - 1) * 26 + 6
+        base_y = top + card_h + (n_cards - 1) * scaling.px(26) + scaling.px(6)
         seat["total"].place(x=x, y=base_y, anchor="n")
-        seat["advice"].place(x=x, y=base_y + 22, anchor="n")
-        offset = 44 + (18 if "\n" in seat["advice"].cget("text") else 0)
+        seat["advice"].place(x=x, y=base_y + scaling.px(22), anchor="n")
+        offset = scaling.px(44) + (scaling.px(18) if "\n" in seat["advice"].cget("text") else 0)
         seat["optimal"].place(x=x, y=base_y + offset, anchor="n")
-        seat["index"].place(x=x, y=base_y + offset + 18, anchor="n")
-        seat["name"].place(x=x, y=base_y + offset + 36, anchor="n")
+        seat["index"].place(x=x, y=base_y + offset + scaling.px(18), anchor="n")
+        seat["name"].place(x=x, y=base_y + offset + scaling.px(36), anchor="n")
         if seat["add"] is not None:
-            seat["add"].place(x=x + card_w / 2 + (54 if split else 14),
+            seat["add"].place(x=x + card_w / 2 + scaling.px(54 if split else 14),
                               y=top + card_h / 2, anchor="w")
         if seat["split_btn"] is not None:
-            seat["split_btn"].place(x=x, y=top - 22, anchor="n")
+            seat["split_btn"].place(x=x, y=top - scaling.px(22), anchor="n")
+
+    def _rescale(self):
+        """scaling.on_change hook: the fonts are already updated — drop the
+        cached photos, re-render every card at the new size from the last
+        snapshot, then re-place the whole table."""
+        self._image_cache.clear()
+        self._dealer_rendered = "__none__"
+        self.dealer_insurance.config(wraplength=scaling.px(170))
+        for seat in self.seats:
+            seat["rendered"] = ["__none__"] * len(seat["rendered"])
+            seat["optimal"].config(wraplength=scaling.px(118))
+            seat["index"].config(wraplength=scaling.px(118))
+        if self._last_snapshot is not None:
+            self.update(self._last_snapshot)
+        self._relayout()
 
     # ----------------------------------------------------------------- update
 
@@ -191,9 +235,9 @@ class TableView:
             if dealer:
                 # The dealer model reports only ranks; render a representative card.
                 full = dealer if " of " in str(dealer) else f"{dealer} of Spades"
-                photo = self.card_image(full, constants.DEALER_CARD_RENDER_SIZE)
+                photo = self.card_image(full, scaling.size(constants.DEALER_CARD_RENDER_SIZE))
             else:
-                photo = self.card_image("back", constants.DEALER_CARD_RENDER_SIZE)
+                photo = self.card_image("back", scaling.size(constants.DEALER_CARD_RENDER_SIZE))
             self.dealer_card_lbl.config(image=photo)
             self.dealer_card_lbl.image = photo
 

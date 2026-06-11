@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-VERSION = "3.0"
+VERSION = "3.1"
 TITLE = f"Blackjack AI - v{VERSION}"
 
 # ---------------------------------------------------------------------------
@@ -229,8 +229,13 @@ ACTION_MAPPING = {
 # ---------------------------------------------------------------------------
 # UI theme (single source of truth for every window)
 # ---------------------------------------------------------------------------
+# UI scale override percent; 0 = auto (per-monitor DPI).
+UI = {"scale": 0}
+
 FONT_FAMILY = "Segoe UI"
 
+# 96-dpi baseline tuples; lib/interfaces/scaling.py replaces these attributes
+# with live named Font objects (DPI-scaled) once a Tk root exists.
 FONT_TITLE = (FONT_FAMILY, 17, "bold")
 FONT_SECTION = (FONT_FAMILY, 11, "bold")
 FONT_BODY = (FONT_FAMILY, 10)

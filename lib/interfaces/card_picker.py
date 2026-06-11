@@ -3,6 +3,7 @@
 import tkinter as tk
 
 from ..common import constants
+from . import scaling
 
 C = constants.COLORS
 
@@ -71,7 +72,7 @@ class CardPicker(tk.Toplevel):
                      bg=C["bg_primary"], fg=color, width=2).grid(row=row, column=0, padx=(0, 6))
             for col, rank in enumerate(constants.CARD_RANKS, start=1):
                 name = f"{rank} of {suit}"
-                photo = image_lookup(name, constants.PICKER_CARD_SIZE)
+                photo = image_lookup(name, scaling.size(constants.PICKER_CARD_SIZE))
                 btn = tk.Button(grid, image=photo, relief="flat", bd=1,
                                 bg=C["bg_secondary"], activebackground=C["border"],
                                 cursor="hand2", command=lambda n=name: self._choose(n))
