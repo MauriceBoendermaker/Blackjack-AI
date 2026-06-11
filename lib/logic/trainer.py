@@ -12,7 +12,7 @@ engine.
 import random
 
 from ..common import constants
-from . import cards, deviations, ev_engine
+from . import cards, deviations, ev_engine, ev_offload
 from .ev_engine import ACE, TEN
 
 # Concrete two-card hands for the deviation table's abstract keys.
@@ -131,7 +131,10 @@ def ev_cost(card, answer_code) -> float | None:
     # H17 indices graded under S17 would contradict the verdict.
     rules = ev_engine.Rules(s17=constants.RULES["s17"], peek=True,
                             surrender=card["source"] == "Fab4")
-    result = ev_engine.evaluate(hand, dealer, comp, rules)
+    # Same worker process as live seat advice: the exact evaluation is pure
+    # Python and would stutter the Tk thread if run on a thread here.
+    result = ev_offload.run("advice", ev_engine.evaluate, hand, dealer, comp,
+                            rules)
     evs = result["evs"]
     if answer_code not in evs:
         return None

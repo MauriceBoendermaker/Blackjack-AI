@@ -9,6 +9,8 @@ call time, so changes take effect on the next snapshot after the engine's
 caches are invalidated (DetectionEngine.refresh_settings)."""
 
 import json
+import os
+import threading
 
 from . import constants
 
@@ -85,11 +87,21 @@ def apply(data: dict):
             constants.OCR[key] = int(bool(ocr[key]))
 
 
+# Serializes concurrent writers (the engine io thread and the Tk thread):
+# without it, two saves sharing the one tmp path collide and os.replace
+# raises PermissionError on Windows.
+_SAVE_LOCK = threading.Lock()
+
+
 def save(data: dict | None = None):
     if data is None:
         data = snapshot()
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    # Atomic replace: a crash mid-write must never truncate the profile.
+    tmp = SETTINGS_PATH.with_suffix(".json.tmp")
+    with _SAVE_LOCK:
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp, SETTINGS_PATH)
 
 
 def load_and_apply() -> bool:

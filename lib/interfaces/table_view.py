@@ -61,6 +61,8 @@ class TableView:
 
         self.canvas = tk.Canvas(parent, bg=C["bg_canvas"], highlightthickness=0)
         self._image_cache = {}
+        self._master_cache = {}  # name -> decoded PIL image, survives rescales
+        self._preload_gen = 0    # invalidates an in-flight preload chain
         self._last_snapshot = None
         self._resize_job = None
         self._preview_item = None
@@ -118,25 +120,42 @@ class TableView:
         cached = self._image_cache.get(key)
         if cached is not None:
             return cached
-        path = constants.card_image_path(card_name) if card_name not in (None, "back") \
-            else constants.CARD_BACK_IMAGE_PATH
-        if not path.exists():
-            path = constants.CARD_BACK_IMAGE_PATH
-        img = Image.open(path).resize(size, Image.LANCZOS)
-        photo = ImageTk.PhotoImage(img)
+        photo = ImageTk.PhotoImage(self._master(card_name).resize(size, Image.LANCZOS))
         self._image_cache[key] = photo
         return photo
 
-    def preload_images(self, names=None, _index=0):
+    def _master(self, card_name):
+        """Decoded source image at the largest size any render can ask for
+        (the dealer card at scaling's max factor). Decoding the 500x726 PNG
+        from disk costs ~5 ms; resizing this in-memory master costs <1 ms —
+        so a DPI rescale (which drops every PhotoImage) re-renders the
+        table without 40+ synchronous disk decodes on the Tk thread."""
+        master = self._master_cache.get(card_name)
+        if master is None:
+            path = constants.card_image_path(card_name) if card_name not in (None, "back") \
+                else constants.CARD_BACK_IMAGE_PATH
+            if not path.exists():
+                path = constants.CARD_BACK_IMAGE_PATH
+            max_size = (round(constants.DEALER_CARD_RENDER_SIZE[0] * scaling.MAX_SCALE),
+                        round(constants.DEALER_CARD_RENDER_SIZE[1] * scaling.MAX_SCALE))
+            master = Image.open(path).resize(max_size, Image.LANCZOS)
+            self._master_cache[card_name] = master
+        return master
+
+    def preload_images(self, names=None, _index=0, _gen=None):
         """Load card images a few per idle tick so the UI never freezes."""
         if names is None:
             names = cardlib.all_card_names()
+            self._preload_gen += 1
+            _gen = self._preload_gen
+        elif _gen != self._preload_gen:
+            return  # superseded by a newer chain (rescale mid-preload)
         end = min(_index + 4, len(names))
         for name in names[_index:end]:
             self.card_image(name)
             self.card_image(name, scaling.size(constants.PICKER_CARD_SIZE))
         if end < len(names):
-            self.canvas.after(15, lambda: self.preload_images(names, end))
+            self.canvas.after(15, lambda: self.preload_images(names, end, _gen))
 
     # --------------------------------------------------------------- geometry
 
@@ -210,8 +229,9 @@ class TableView:
 
     def _rescale(self):
         """scaling.on_change hook: the fonts are already updated — drop the
-        cached photos, re-render every card at the new size from the last
-        snapshot, then re-place the whole table."""
+        cached photos (masters survive), re-render every card at the new
+        size from the last snapshot, re-place the table, then re-warm the
+        cache so the next CardPicker open doesn't pay 52 cold renders."""
         self._image_cache.clear()
         self._dealer_rendered = "__none__"
         self.dealer_insurance.config(wraplength=scaling.px(170))
@@ -222,6 +242,7 @@ class TableView:
         if self._last_snapshot is not None:
             self.update(self._last_snapshot)
         self._relayout()
+        self.preload_images()
 
     # ----------------------------------------------------------------- update
 

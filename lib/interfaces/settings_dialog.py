@@ -35,11 +35,36 @@ class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, on_apply=None):
         super().__init__(parent)
         self.title("Settings")
-        self.configure(bg=C["bg_secondary"], padx=18, pady=14)
-        self.resizable(False, False)
+        self.configure(bg=C["bg_secondary"], padx=scaling.px(18),
+                       pady=scaling.px(14))
+        self.resizable(True, True)
         self.transient(parent)
         self.on_apply = on_apply
         self._vars = {}
+        self._wrapped = []  # (label, 96-dpi wraplength) re-resolved on rescale
+
+        # Bottom bar packs FIRST: if the window ever gets smaller than its
+        # content, the notebook clips — never the Save/Cancel row.
+        buttons = tk.Frame(self, bg=C["bg_secondary"])
+        buttons.pack(side=tk.BOTTOM, fill=tk.X, pady=(scaling.px(8), 0))
+        tk.Button(buttons, text="Save & Apply", command=self._save,
+                  bg=C["success"], fg="white", relief="flat",
+                  padx=scaling.px(16), pady=scaling.px(7),
+                  font=constants.FONT_BODY, cursor="hand2"
+                  ).pack(side=tk.RIGHT, padx=scaling.px(4))
+        tk.Button(buttons, text="Cancel", command=self.destroy,
+                  bg=C["text_secondary"], fg="white", relief="flat",
+                  padx=scaling.px(16), pady=scaling.px(7),
+                  font=constants.FONT_BODY, cursor="hand2"
+                  ).pack(side=tk.RIGHT, padx=scaling.px(4))
+
+        # Inline validation message — _save refuses instead of guessing.
+        self.error_var = tk.StringVar(value="")
+        error = tk.Label(self, textvariable=self.error_var, font=constants.FONT_SMALL,
+                         bg=C["bg_secondary"], fg=C["danger"],
+                         wraplength=scaling.px(360), justify="left")
+        error.pack(side=tk.BOTTOM, anchor="w", pady=(scaling.px(8), 0))
+        self._wrapped.append((error, 360))
 
         notebook = ttk.Notebook(self, style=self._notebook_style())
         notebook.pack(fill=tk.BOTH, expand=True)
@@ -48,22 +73,48 @@ class SettingsDialog(tk.Toplevel):
         self._build_sidebets_tab(self._tab(notebook, "Side bets"))
         self._build_app_tab(self._tab(notebook, "App"))
 
-        # Inline validation message — _save refuses instead of guessing.
-        self.error_var = tk.StringVar(value="")
-        tk.Label(self, textvariable=self.error_var, font=constants.FONT_SMALL,
-                 bg=C["bg_secondary"], fg=C["danger"], wraplength=360,
-                 justify="left").pack(anchor="w", pady=(8, 0))
-
-        buttons = tk.Frame(self, bg=C["bg_secondary"])
-        buttons.pack(fill=tk.X, pady=(8, 0))
-        tk.Button(buttons, text="Save & Apply", command=self._save,
-                  bg=C["success"], fg="white", relief="flat", padx=16, pady=7,
-                  font=constants.FONT_BODY, cursor="hand2").pack(side=tk.RIGHT, padx=4)
-        tk.Button(buttons, text="Cancel", command=self.destroy,
-                  bg=C["text_secondary"], fg="white", relief="flat", padx=16, pady=7,
-                  font=constants.FONT_BODY, cursor="hand2").pack(side=tk.RIGHT, padx=4)
-
+        self._fit_to_monitor()
+        # A DPI rescale while the dialog is open (the root moved monitors)
+        # regrows the shared fonts; re-wrap and re-clamp so the Save row
+        # can't end up off-screen. Detached on destroy — scaling keeps the
+        # callback list for the process lifetime.
+        scaling.on_change(self._on_rescale)
+        self.bind("<Destroy>", self._on_destroy, add="+")
         self.grab_set()
+
+    def _fit_to_monitor(self):
+        """Open near the parent (the monitor the fonts were resolved for)
+        and clamp to that monitor's work area only when the natural size
+        would clip — an unconditional geometry() would freeze shrink-wrap.
+        The position clamps keep the whole dialog (the bottom Save row
+        included) inside the work area; ~45 px of headroom covers the WM
+        caption that geometry's outer coordinates sit above."""
+        self.update_idletasks()
+        req_w, req_h = self.winfo_reqwidth(), self.winfo_reqheight()
+        work_x, work_y, work_w, work_h = scaling.workarea(self.master)
+        width = min(req_w, int(work_w * 0.9))
+        height = min(req_h, int(work_h * 0.9))
+        x = self.master.winfo_rootx() + scaling.px(60)
+        y = self.master.winfo_rooty() + scaling.px(40)
+        x = max(work_x, min(x, work_x + work_w - width))
+        y = max(work_y, min(y, work_y + work_h - height - scaling.px(45)))
+        if req_w > work_w * 0.9 or req_h > work_h * 0.9:
+            self.geometry(f"{width}x{height}+{x}+{y}")
+        else:
+            self.geometry(f"+{x}+{y}")  # position only: keep shrink-wrap
+        self.minsize(scaling.px(420), scaling.px(320))
+
+    def _on_rescale(self):
+        if not self.winfo_exists():
+            return
+        for label, base in self._wrapped:
+            label.config(wraplength=scaling.px(base))
+        self.geometry("")  # back to natural size under the new font scale
+        self._fit_to_monitor()
+
+    def _on_destroy(self, event):
+        if event.widget is self:
+            scaling.off_change(self._on_rescale)
 
     # --------------------------------------------------------------- tabs
 
@@ -92,14 +143,16 @@ class SettingsDialog(tk.Toplevel):
         style.configure("Settings.TNotebook.Tab", font=constants.FONT_BODY,
                         background=C["bg_primary"], foreground=C["text_secondary"],
                         bordercolor=C["border"], lightcolor=C["bg_primary"],
-                        padding=(14, 6), focuscolor=C["bg_secondary"])
+                        padding=(scaling.px(14), scaling.px(6)),
+                        focuscolor=C["bg_secondary"])
         style.map("Settings.TNotebook.Tab",
                   background=[("selected", C["bg_secondary"])],
                   foreground=[("selected", C["text_primary"])])
         return "Settings.TNotebook"
 
     def _tab(self, notebook, title):
-        frame = tk.Frame(notebook, bg=C["bg_secondary"], padx=14, pady=10)
+        frame = tk.Frame(notebook, bg=C["bg_secondary"],
+                         padx=scaling.px(14), pady=scaling.px(10))
         notebook.add(frame, text=title)
         return frame
 
@@ -134,7 +187,8 @@ class SettingsDialog(tk.Toplevel):
                                   "reset the shoe after changing it mid-session.",
                         font=constants.FONT_SMALL, bg=C["bg_secondary"],
                         fg=C["text_secondary"], justify="left")
-        note.grid(row=row, column=0, columnspan=2, sticky="w", pady=(10, 4))
+        note.grid(row=row, column=0, columnspan=2, sticky="w",
+                  pady=(scaling.px(10), scaling.px(4)))
 
     def _build_sidebets_tab(self, tab):
         row = self._heading(tab, 0, "Side bets offered")
@@ -186,10 +240,12 @@ class SettingsDialog(tk.Toplevel):
     # ------------------------------------------------------------ widgets
 
     def _heading(self, parent, row, text):
-        pad = (12, 4) if row else (0, 4)
-        tk.Label(parent, text=text, font=constants.FONT_SECTION, bg=C["bg_secondary"],
-                 fg=C["text_primary"], wraplength=360, justify="left"
-                 ).grid(row=row, column=0, columnspan=2, sticky="w", pady=pad)
+        pad = (scaling.px(12), scaling.px(4)) if row else (0, scaling.px(4))
+        label = tk.Label(parent, text=text, font=constants.FONT_SECTION,
+                         bg=C["bg_secondary"], fg=C["text_primary"],
+                         wraplength=scaling.px(360), justify="left")
+        label.grid(row=row, column=0, columnspan=2, sticky="w", pady=pad)
+        self._wrapped.append((label, 360))
         return row + 1
 
     def _field(self, parent, row, key, label, kind, options, current):
@@ -208,7 +264,8 @@ class SettingsDialog(tk.Toplevel):
         tk.Label(parent, text=label, font=constants.FONT_BODY, bg=C["bg_secondary"],
                  fg=C["text_secondary"], anchor="w").grid(row=row, column=0, sticky="w")
         ttk.Combobox(parent, textvariable=var, values=labels, state="readonly",
-                     width=22).grid(row=row, column=1, sticky="w", padx=(10, 0), pady=2)
+                     width=22).grid(row=row, column=1, sticky="w",
+                                    padx=(scaling.px(10), 0), pady=scaling.px(2))
         return row + 1
 
     def _spin(self, parent, row, key, label, lo, hi, current):
@@ -217,7 +274,8 @@ class SettingsDialog(tk.Toplevel):
         tk.Label(parent, text=label, font=constants.FONT_BODY, bg=C["bg_secondary"],
                  fg=C["text_secondary"], anchor="w").grid(row=row, column=0, sticky="w")
         spin = tk.Spinbox(parent, from_=lo, to=hi, textvariable=var, width=8)
-        spin.grid(row=row, column=1, sticky="w", padx=(10, 0), pady=2)
+        spin.grid(row=row, column=1, sticky="w",
+                  padx=(scaling.px(10), 0), pady=scaling.px(2))
         attach_numeric_entry(spin, integer=True)
         return row + 1
 

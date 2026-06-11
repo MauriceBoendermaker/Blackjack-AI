@@ -35,7 +35,9 @@ class ModernBlackjackGUI(tk.Tk):
         self.title(constants.TITLE)
         width, height = self._initial_geometry()
         self.geometry(f"{width}x{height}")
-        self.minsize(min(scaling.px(1150), width), min(scaling.px(760), height))
+        self._minsize_applied = (min(scaling.px(1150), width),
+                                 min(scaling.px(760), height))
+        self.minsize(*self._minsize_applied)
         self.configure(bg=C["bg_primary"])
 
         self.log_manager = log_manager
@@ -74,8 +76,15 @@ class ModernBlackjackGUI(tk.Tk):
         self.columnconfigure(0, minsize=scaling.px(340))
         self._sidebar_canvas.config(width=scaling.px(320))
         self.nav_bar.config(height=scaling.px(42))
-        width, height = self._initial_geometry()
-        self.minsize(min(scaling.px(1150), width), min(scaling.px(760), height))
+        # Minsize follows the CURRENT monitor (not the primary) and is only
+        # re-asserted on change — a redundant minsize can emit WM resizes
+        # that re-feed the DPI watcher after its guard releases.
+        _, _, work_w, work_h = scaling.workarea(self)
+        minsize = (min(scaling.px(1150), int(work_w * 0.92)),
+                   min(scaling.px(760), int(work_h * 0.92)))
+        if minsize != self._minsize_applied:
+            self._minsize_applied = minsize
+            self.minsize(*minsize)
         ttk.Style(self).configure("Dark.Vertical.TScrollbar",
                                   width=scaling.px(10))
 
@@ -335,6 +344,8 @@ class ModernBlackjackGUI(tk.Tk):
         attach_numeric_entry(entry)
         entry.bind("<Return>", lambda e: self._set_bankroll())
         entry.bind("<FocusOut>", lambda e: self._set_bankroll())
+        self.bankroll_entry = entry
+        self._synced_bankroll = constants.BETTING["bankroll"]
 
         # The bet actually placed per owned seat — settlement converts the
         # round's units into euros with this (defaults to the base bet).
@@ -350,6 +361,8 @@ class ModernBlackjackGUI(tk.Tk):
         attach_numeric_entry(bet_entry)
         bet_entry.bind("<Return>", lambda e: self._set_bet_placed())
         bet_entry.bind("<FocusOut>", lambda e: self._set_bet_placed())
+        self.bet_entry = bet_entry
+        self._synced_bet = float(constants.BASE_BET)
         tk.Label(section, text="Click a seat's name on the table to mark it as"
                                " yours — only owned seats settle into the P&L.",
                  font=constants.FONT_SMALL, bg=C["bg_secondary"],
@@ -434,9 +447,14 @@ class ModernBlackjackGUI(tk.Tk):
             return
         self.monitor = self._monitors[idx]
         self.controller.set_monitor(self.monitor)
-        self.monitor_status.config(
-            text=f"Using monitor {idx + 1} — {self.monitor.width}x{self.monitor.height}",
-            fg=C["success"])
+        status = f"Using monitor {idx + 1} — {self.monitor.width}x{self.monitor.height}"
+        from ..logic.ocr import OCR_AVAILABLE
+        if (OCR_AVAILABLE and constants.OCR.get("enabled")
+                and not self.controller.engine.ocr_calibrated):
+            # The region file is keyed by exact resolution — without this
+            # hint a monitor switch silently disables balance/bet OCR.
+            status += " · OCR not calibrated for this resolution"
+        self.monitor_status.config(text=status, fg=C["success"])
         self.start_btn.config(state="normal")
         self.regions_btn.config(state="normal")
         self.calibrate_btn.config(state="normal")
@@ -564,6 +582,7 @@ class ModernBlackjackGUI(tk.Tk):
             self.monitor_combo.config(state="readonly")
 
     def _render(self, snap):
+        self._sync_money_entries(snap)
         self.table.remember_snapshot(snap)
         self.table.update(snap)
         hud = getattr(self, "hud", None)
@@ -634,6 +653,28 @@ class ModernBlackjackGUI(tk.Tk):
         elif not self.controller.running:
             self.metrics_var.set("")
 
+    def _sync_money_entries(self, snap):
+        """Reflect engine-side bankroll / bet-placed (OCR sync, auto-settle)
+        into the sidebar entries without fighting the user: skip whichever
+        entry holds keyboard focus, and write only when the engine value
+        moved since the last sync so a manual edit is never clobbered by an
+        unchanged engine value. Setting a StringVar on an unfocused Entry
+        fires no FocusOut, so this can't loop through the commit handlers."""
+        try:
+            focused = self.focus_get()
+        except (KeyError, tk.TclError):  # combobox popdowns confuse focus_get
+            focused = None
+        bankroll = snap.get("bankroll")
+        if (bankroll is not None and bankroll != self._synced_bankroll
+                and focused is not self.bankroll_entry):
+            self._synced_bankroll = bankroll
+            self.bankroll_var.set(f"{bankroll:.10g}")
+        bet = snap.get("bet_placed")
+        if (bet is not None and bet != self._synced_bet
+                and focused is not self.bet_entry):
+            self._synced_bet = bet
+            self.bet_placed_var.set(f"{bet:.10g}")
+
     def _open_settings(self):
         from .settings_dialog import SettingsDialog
         SettingsDialog(self, on_apply=self.controller.engine.refresh_settings)
@@ -649,6 +690,7 @@ class ModernBlackjackGUI(tk.Tk):
             value = float(self.bet_placed_var.get().replace(",", "."))
         except ValueError:
             self.bet_placed_var.set(f"{self.controller.engine.bet_placed:.10g}")
+            self._synced_bet = self.controller.engine.bet_placed
             return
         # Same bound as the bankroll: keeps every later :.10g reset free of
         # scientific notation, which the keystroke validator would reject.
@@ -656,6 +698,7 @@ class ModernBlackjackGUI(tk.Tk):
             value = 10_000_000.0
             self.bet_placed_var.set(f"{value:.10g}")
         if value >= 0:
+            self._synced_bet = value
             self.controller.engine.set_bet_placed(value)
 
     def _open_stats(self):
@@ -718,11 +761,11 @@ class ModernBlackjackGUI(tk.Tk):
             self.set_status("Previous shoe restored — counts are live again.")
 
     def _set_bankroll(self):
-        from ..common import settings
         try:
             value = float(self.bankroll_var.get().replace(",", "."))
         except ValueError:
             self.bankroll_var.set(f"{constants.BETTING['bankroll']:.10g}")
+            self._synced_bankroll = constants.BETTING["bankroll"]
             return
         # Keystrokes only filter syntax; the bounds clamp happens here.
         if value > 10_000_000:
@@ -730,7 +773,10 @@ class ModernBlackjackGUI(tk.Tk):
             self.bankroll_var.set(f"{value:.10g}")
         if value > 0 and value != constants.BETTING["bankroll"]:
             constants.BETTING["bankroll"] = value
-            settings.save()
+            self._synced_bankroll = value
+            # Off the Tk thread: an AV-scanned profile dir can make even a
+            # small JSON write hitch the UI when it fires on focus changes.
+            self.controller.engine.persist_settings_async()
             self.controller.engine.publish_snapshot()
             self.set_status(f"Bankroll set to €{value:g} — bet ramp updated.")
 
@@ -770,4 +816,11 @@ class ModernBlackjackGUI(tk.Tk):
 
     def _on_close(self):
         self.controller.stop()
+        # OCR bankroll syncs persist at round end; a close mid-round must
+        # not lose the latest value.
+        try:
+            from ..common import settings
+            settings.save()
+        except Exception:
+            pass
         self.destroy()

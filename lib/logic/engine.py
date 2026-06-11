@@ -27,6 +27,7 @@ from . import betting
 from . import cards
 from . import deviations
 from . import ev_engine
+from . import ev_offload
 from . import ocr
 from . import seat_quality
 from . import settlement
@@ -130,6 +131,12 @@ class DetectionEngine:
         # jobs publish a fresh snapshot themselves.
         self._advice_pool = ThreadPoolExecutor(max_workers=1,
                                                thread_name_prefix="advice")
+        # Disk and OCR work gets its own worker so a balance read or a
+        # SQLite write never queues behind EV recursion (and vice versa).
+        # All SQLite writers stay on this ONE thread so shoe-state writes
+        # keep their order.
+        self._io_pool = ThreadPoolExecutor(max_workers=1,
+                                           thread_name_prefix="io")
         self._advice_lock = threading.Lock()
         self._advice_cache = {}     # advice key -> ev_engine result (or None)
         self._advice_pending = {}   # advice key -> submit time (time.monotonic)
@@ -148,6 +155,7 @@ class DetectionEngine:
         self._ocr_last = {"balance": None, "bet": None, "result": None, "ts": 0.0}
         self._ocr_pending = False
         self._ocr_next = 0.0
+        self._settings_dirty = False  # OCR bankroll syncs persist at round end
         self.training = TrainingDataCollector()
         self._last_frame = None
         self._confirm_count = 0
@@ -171,12 +179,27 @@ class DetectionEngine:
             sx, _ = scaling_factors(res)
             self._dist_scale = sx
             self._ocr_regions = ocr.load_regions(res)
+        if (self._ocr_regions is None and ocr.OCR_AVAILABLE
+                and constants.OCR.get("enabled")):
+            # Region files are keyed by exact capture resolution; without
+            # this line a monitor change silently kills balance/bet OCR.
+            self.log(f"OCR regions not calibrated for {res[0]}x{res[1]} — "
+                     "balance/bet OCR paused (use OCR Regions to calibrate).",
+                     level="WARNING")
+
+    @property
+    def ocr_calibrated(self) -> bool:
+        """OCR regions exist for the current capture resolution."""
+        return self._ocr_regions is not None
 
     def warm_up(self):
         """Initialize models (network handshake for the hosted API). Call from
         the worker thread before the first cycle so the GUI never blocks."""
         self.provider.players_model()
         self.provider.dealer_model()
+        # Spawn the EV worker processes now so the first advice/pre-deal
+        # job doesn't pay the process start-up mid-round.
+        ev_offload.prewarm("advice", "predeal")
 
     def health_check_and_refresh(self) -> bool:
         """Refresh model backends after a long idle gap (system sleep/restore).
@@ -227,6 +250,11 @@ class DetectionEngine:
         skipped = False
         try:
             frame = self.capture.grab_bgr()
+            # OCR runs regardless of the frame diff: a balance/bet text
+            # change in a small corner never trips the whole-frame
+            # threshold, so a static table would defer reads ~10 s.
+            # _maybe_ocr self-throttles to OCR["interval_s"].
+            self._maybe_ocr(frame)
             if self._frame_unchanged(frame):
                 skipped = True
                 if self._empty_frames > 0:
@@ -240,7 +268,6 @@ class DetectionEngine:
                         self._maybe_auto_new_round([])
             else:
                 self._detect(frame)
-                self._maybe_ocr(frame)
         except ModelError as e:
             self.last_error = str(e)
             self.log(f"Error: {e}")
@@ -450,8 +477,9 @@ class DetectionEngine:
 
     def _warm_advice_job(self, dealer_rank, per_rank):
         try:
-            ev_engine.advise(["2 of Hearts", "3 of Clubs"], dealer_rank, per_rank,
-                             self.counter.deck_count)
+            ev_offload.run("advice", ev_engine.advise,
+                           ["2 of Hearts", "3 of Clubs"], dealer_rank, per_rank,
+                           self.counter.deck_count, ev_engine.current_rules())
         except Exception:
             pass
 
@@ -495,8 +523,8 @@ class DetectionEngine:
         for key in [k for k in self._pending_extra if k not in seen_pending]:
             _, name, qx, qy = key
             if self._last_frame is not None:
-                self._advice_pool.submit(self.training.save_sample, self._last_frame,
-                                         qx * 50.0, qy * 50.0, name, "lowconf")
+                self._io_pool.submit(self.training.save_sample, self._last_frame,
+                                     qx * 50.0, qy * 50.0, name, "lowconf")
             del self._pending_extra[key]
 
     def _seat_for_point(self, x, y):
@@ -542,8 +570,8 @@ class DetectionEngine:
         self._confirm_count += 1
         every = constants.TRAINING.get("confirmed_every", 25)
         if self._last_frame is not None and self._confirm_count % every == 0:
-            self._advice_pool.submit(self.training.save_sample, self._last_frame,
-                                     pred["cx"], pred["cy"], pred["name"], "confirmed")
+            self._io_pool.submit(self.training.save_sample, self._last_frame,
+                                 pred["cx"], pred["cy"], pred["name"], "confirmed")
 
     @staticmethod
     def _assign_hand(seat, cx):
@@ -625,7 +653,7 @@ class DetectionEngine:
             settle = self._settle_round(snap)
             snap = {**snap, "settlement": settle, "bet_placed": self.bet_placed}
             if self.store is not None:
-                self._advice_pool.submit(
+                self._io_pool.submit(
                     self._persist_round_job, snap, self.counter.get_state(),
                     self.round_number, self.cutting_card_seen,
                     self._shoe_paytable_hash)
@@ -650,6 +678,10 @@ class DetectionEngine:
                 self.bet_capped_rounds += 1
                 self.log(f"Bet capped at table max "
                          f"({self.bet_capped_rounds}× this session)", level="WARNING")
+        if self._settings_dirty:
+            # OCR bankroll syncs persist once per round, not per read.
+            self._settings_dirty = False
+            self._io_pool.submit(self._save_settings_job)
         self.round_number += 1
         if self.cutting_card_seen:
             self.log("Reminder: cutting card was seen — reset the shoe count after the shuffle.")
@@ -678,7 +710,7 @@ class DetectionEngine:
                     card["counted"] = False
             self._dealer_counted = False
         if self.store is not None:
-            self._advice_pool.submit(self._save_state_job)
+            self._io_pool.submit(self._save_state_job)
         self.log("Shoe counts reset.")
         self.publish_snapshot()
 
@@ -727,7 +759,7 @@ class DetectionEngine:
                     if (not old["manual"] and old["cx"] is not None
                             and card_name != old["name"]
                             and self._last_frame is not None):
-                        self._advice_pool.submit(
+                        self._io_pool.submit(
                             self.training.save_sample, self._last_frame,
                             old["cx"], old["cy"], card_name, "correction")
             elif card_name is not None and len(seat.cards) < constants.MAX_CARDS_PER_SEAT:
@@ -840,7 +872,7 @@ class DetectionEngine:
                 constants.BETTING["bankroll"] = max(0.0, constants.BETTING["bankroll"] + eur)
                 self.log(f"Bankroll {eur:+.2f} EUR -> {constants.BETTING['bankroll']:g} "
                          "(auto-settled)")
-                self._advice_pool.submit(self._save_settings_job)
+                self._io_pool.submit(self._save_settings_job)
         return settle
 
     @staticmethod
@@ -850,6 +882,11 @@ class DetectionEngine:
             settings.save()
         except Exception:
             pass
+
+    def persist_settings_async(self):
+        """Write settings.json off the calling thread (GUI commits use this
+        so a slow disk never hitches the Tk loop)."""
+        self._io_pool.submit(self._save_settings_job)
 
     def _persist_round_job(self, snap, counter_state, round_number, cutting,
                            paytable_hash):
@@ -897,8 +934,11 @@ class DetectionEngine:
         self.publish_snapshot()
 
     def set_bet_placed(self, eur):
+        eur = max(0.0, float(eur))
         with self._lock:
-            self.bet_placed = max(0.0, float(eur))
+            if eur == self.bet_placed:
+                return  # no-op commits (FocusOut traversals) skip the rebuild
+            self.bet_placed = eur
         self.publish_snapshot()
 
     @staticmethod
@@ -1007,9 +1047,13 @@ class DetectionEngine:
 
     def _advice_job(self, key, hand, dealer_rank, per_rank, post_split=False):
         try:
-            result = ev_engine.advise(hand, dealer_rank, per_rank,
-                                      self.counter.deck_count,
-                                      post_split=post_split)
+            # Computed in a persistent worker process: the EV recursion is
+            # pure Python and would otherwise starve the Tk thread of the
+            # GIL. Rules pass explicitly — the child has default constants.
+            result = ev_offload.run("advice", ev_engine.advise, hand,
+                                    dealer_rank, per_rank,
+                                    self.counter.deck_count,
+                                    ev_engine.current_rules(), post_split)
         except Exception as e:
             result = None
             self._log_ev_error(key, f"EV engine error for {hand} vs "
@@ -1022,12 +1066,14 @@ class DetectionEngine:
         self.publish_snapshot()
 
     def flush_advice(self, timeout=15.0) -> bool:
-        """Block until all queued advice/side-bet jobs have landed and the
-        snapshot reflects them. For tests and debugging only."""
+        """Block until all queued advice/side-bet/persistence jobs have
+        landed and the snapshot reflects them. For tests and debugging only."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             barrier = self._advice_pool.submit(lambda: None)
             barrier.result(max(0.1, deadline - time.monotonic()))
+            io_barrier = self._io_pool.submit(lambda: None)
+            io_barrier.result(max(0.1, deadline - time.monotonic()))
             with self._advice_lock:
                 if not self._advice_pending and not self._sidebet_pending:
                     return True
@@ -1108,7 +1154,15 @@ class DetectionEngine:
         sig = (count["cards_seen"], tuple(sorted(count["per_rank"].items())),
                self.counter.deck_count, tuple(sorted(constants.RULES.items())))
         with self._advice_lock:
-            if self._predeal["sig"] != sig and not self._predeal_pending:
+            # Sweeps run between rounds only ("waiting"): the edge prices
+            # the NEXT round's bet, so re-sweeping after every dealt card
+            # is pure CPU waste — the pre-round edge stays valid mid-round.
+            # Live _activity(), not _last_activity: the cached value only
+            # updates while the detection worker runs, and a stop mid-round
+            # would close the gate forever for manual play. (Caller holds
+            # self._lock — publish_snapshot — which _activity requires.)
+            if (self._predeal["sig"] != sig and not self._predeal_pending
+                    and self._activity() == "waiting"):
                 self._predeal_pending = True
                 self._predeal_pool.submit(self._predeal_job, sig,
                                           dict(count["per_rank"]))
@@ -1117,7 +1171,10 @@ class DetectionEngine:
     def _predeal_job(self, sig, per_rank):
         try:
             comp = ev_engine.comp_from_per_rank(per_rank, self.counter.deck_count)
-            edge = (ev_engine.predeal_ev(comp, ev_engine.current_rules())
+            # The sweep is seconds of pure Python — run it in its own
+            # worker process so it can't contend with the Tk thread's GIL.
+            edge = (ev_offload.run("predeal", ev_engine.predeal_ev, comp,
+                                   ev_engine.current_rules())
                     if sum(comp) >= 52 else None)
         except Exception as e:
             edge = None
@@ -1150,7 +1207,7 @@ class DetectionEngine:
         if not crops:
             return
         self._ocr_pending = True
-        self._advice_pool.submit(self._ocr_job, crops)
+        self._io_pool.submit(self._ocr_job, crops)
 
     def _ocr_job(self, crops):
         try:
@@ -1184,7 +1241,9 @@ class DetectionEngine:
             if abs(balance - constants.BETTING["bankroll"]) >= 0.01:
                 constants.BETTING["bankroll"] = balance
                 self.log(f"Bankroll synced from screen: €{balance:g}")
-                self._save_settings_job()
+                # Persist once at round end, not per read — payout
+                # animations would otherwise rewrite settings.json at 1 Hz.
+                self._settings_dirty = True
         bet = values.get("bet")
         if bet and constants.OCR.get("sync_bet"):
             table_max = float(constants.BETTING.get("table_max") or 0)
@@ -1377,6 +1436,7 @@ class DetectionEngine:
                 "bet_behind": self._bet_behind_text(suggestion["edge"]),
                 "edge_exact": self._predeal["edge"],
                 "bet_placed": self.bet_placed,
+                "bankroll": float(constants.BETTING["bankroll"]),
                 "bet_capped_rounds": self.bet_capped_rounds,
                 "session_pnl": dict(self.session_pnl),
                 "ocr": dict(self._ocr_last) if self._ocr_regions else None,

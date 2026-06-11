@@ -11,6 +11,7 @@ resolve_scale/px/size are pure; importing this module never needs a display
 """
 
 import ctypes
+import ctypes.wintypes as wintypes
 import tkinter as tk
 import tkinter.font as tkfont
 
@@ -19,6 +20,7 @@ from ..common import constants
 # Scale-factor bounds: below 0.75 text turns unreadable, above 3.0 nothing
 # fits even on the largest monitor.
 _MIN_SCALE, _MAX_SCALE = 0.75, 3.0
+MAX_SCALE = _MAX_SCALE  # public: callers size caches for the worst case
 # Relative scale changes smaller than this are noise (DPI reads jitter while
 # the window straddles two monitors mid-drag).
 _CHANGE_THRESHOLD = 0.02
@@ -33,7 +35,8 @@ _BASELINES = {name: getattr(constants, name) for name in (
 _scale = 1.0
 _fonts = {}       # constants attr name -> tkfont.Font, created by init()
 _callbacks = []   # fired after every rescale (fonts already updated)
-_resizing = False  # re-entrancy guard: our own geometry() fires <Configure>
+_resizing = False  # watcher guard: our own geometry() fires <Configure>
+_resize_job = None  # pending _end_resize after() id
 
 
 def resolve_scale(dpi, override_pct):
@@ -66,6 +69,46 @@ def size(wh_tuple):
 def on_change(callback):
     """Register a no-arg callback fired after every rescale."""
     _callbacks.append(callback)
+
+
+def off_change(callback):
+    """Unregister an on_change callback (windows that outlive a rescale
+    hook must detach it on destroy or it fires on dead widgets)."""
+    try:
+        _callbacks.remove(callback)
+    except ValueError:
+        pass
+
+
+def workarea(window):
+    """(left, top, width, height) of the work area of the window's monitor.
+
+    Per-monitor DPI awareness means Tk's winfo_screenwidth always reports
+    the PRIMARY monitor, which is the wrong clamp for a window sitting on
+    another screen. The origin matters too: secondary monitors live at
+    non-zero (often negative) virtual-desktop coordinates, so position
+    clamps need left/top, not just the size. Falls back to the primary
+    screen on any failure."""
+    try:
+        user32 = ctypes.windll.user32
+        monitor = user32.MonitorFromWindow(window.winfo_id(), 2)  # NEAREST
+        info = _MONITORINFO()
+        info.cbSize = ctypes.sizeof(_MONITORINFO)
+        if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            width = info.rcWork.right - info.rcWork.left
+            height = info.rcWork.bottom - info.rcWork.top
+            if width > 0 and height > 0:
+                return info.rcWork.left, info.rcWork.top, width, height
+    except Exception:
+        pass
+    return 0, 0, window.winfo_screenwidth(), window.winfo_screenheight()
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD),
+                ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT),
+                ("dwFlags", wintypes.DWORD)]
 
 
 def init(root):
@@ -168,22 +211,44 @@ def _apply_scale(root, new_scale):
 
 
 def _resize_window(root, ratio):
-    """Resize the toplevel proportionally so the layout keeps its density."""
-    global _resizing
-    if _resizing or abs(ratio - 1.0) < 0.001:
+    """Resize the toplevel proportionally so the layout keeps its density.
+
+    Anchored on the window CENTRE: a top-left-anchored grow can push the
+    window's majority area back across a monitor boundary mid-drag and
+    oscillate the DPI watcher; symmetric scaling leaves the majority
+    monitor invariant. Clamped to the monitor work area so a large scale
+    can never grow the window past the screen (repro-verified overflow).
+    Never early-returns on _resizing — _apply_scale has already committed
+    the new scale, so dropping the geometry change would desync them."""
+    global _resizing, _resize_job
+    if abs(ratio - 1.0) < 0.001:
         return
     _resizing = True
-    width = max(200, round(root.winfo_width() * ratio))
-    height = max(150, round(root.winfo_height() * ratio))
-    root.geometry(f"{width}x{height}")
+    if _resize_job is not None:
+        try:
+            root.after_cancel(_resize_job)
+        except tk.TclError:
+            pass
+    work_x, work_y, work_w, work_h = workarea(root)
+    old_w, old_h = root.winfo_width(), root.winfo_height()
+    width = min(max(200, round(old_w * ratio)), int(work_w * 0.95))
+    height = min(max(150, round(old_h * ratio)), int(work_h * 0.95))
+    # Centre-anchored, then clamped fully onto the monitor — a grow near
+    # the screen top would otherwise push the title bar off-screen.
+    x = root.winfo_x() + (old_w - width) // 2
+    y = root.winfo_y() + (old_h - height) // 2
+    x = max(work_x, min(x, work_x + work_w - width))
+    y = max(work_y, min(y, work_y + work_h - height))
+    root.geometry(f"{width}x{height}+{x}+{y}")
     # Released on a timer so the <Configure> burst from our own resize has
     # drained before the watcher may schedule another DPI check.
-    root.after(_WATCH_DEBOUNCE_MS + 50, _end_resize)
+    _resize_job = root.after(_WATCH_DEBOUNCE_MS + 50, _end_resize)
 
 
 def _end_resize():
-    global _resizing
+    global _resizing, _resize_job
     _resizing = False
+    _resize_job = None
 
 
 def _fire_callbacks():
