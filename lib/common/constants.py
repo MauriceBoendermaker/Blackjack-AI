@@ -29,7 +29,8 @@ def card_image_path(card_name: str) -> Path:
 # Detection models
 # ---------------------------------------------------------------------------
 # The API key can be overridden without touching code: set ROBOFLOW_API_KEY.
-ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY", "WBy7jG6AiiqjzifOfiNH")
+# ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY", "WBy7jG6AiiqjzifOfiNH")
+ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY", "Yp7H8pUXd3U4fW3bJxDs")
 
 PROJECT_ID_PLAYERS = "dey022"
 MODEL_VERSION_PLAYERS = 1
