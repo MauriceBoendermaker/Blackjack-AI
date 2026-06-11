@@ -6,16 +6,16 @@ screen text than Tesseract. It has no character whitelist, so numeric fields
 are post-filtered with a regex (the € glyph commonly OCRs as '?') and the
 result banner snaps to its tiny fixed vocabulary.
 
-Regions are per-resolution rectangles in output/ocr_regions_{w}x{h}.json,
-drawn with the OCR-region editor. Reads run on the engine's advice thread at
-~1 Hz; results sync the bankroll ("ground truth beats bookkeeping"), the
-bet-placed field, and cross-check the result banner against settlement.
+Regions are per-resolution rectangles stored in the ACTIVE table profile
+(lib/logic/region_profiles.py), drawn with the OCR-region editor. Reads run
+on the engine's I/O thread at ~1 Hz; results sync the bankroll ("ground
+truth beats bookkeeping"), the bet-placed field, and cross-check the result
+banner against settlement.
 """
 
-import json
 import re
 
-from ..common import constants
+from . import region_profiles
 
 try:
     import winocr  # Windows-only; optional at runtime
@@ -74,39 +74,31 @@ def snap_result(text) -> str | None:
 
 # --------------------------------------------------------- region profiles
 
-def regions_path(resolution):
-    w, h = resolution
-    return constants.OUTPUT_DIR / f"ocr_regions_{w}x{h}.json"
-
-
 def load_regions(resolution):
-    """{'balance': [l,t,r,b], ...} (keys optional) or None when unset."""
-    path = regions_path(resolution)
-    if not path.exists():
-        return None
+    """{'balance': [l,t,r,b], ...} (keys optional) or None when unset —
+    the ACTIVE table profile's OCR rects for this resolution."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = region_profiles.get_ocr(resolution)
+        if data is None:
+            return None
         out = {}
         for key in REGION_KEYS:
             rect = data.get(key)
             if rect and len(rect) == 4 and rect[2] > rect[0] and rect[3] > rect[1]:
                 out[key] = [int(v) for v in rect]
         return out or None
-    except (OSError, ValueError, TypeError) as e:
+    except (ValueError, TypeError, AttributeError) as e:
         print(f"OCR regions unreadable ({e}); OCR disabled.")
         return None
 
 
 def save_regions(resolution, regions: dict):
-    path = regions_path(resolution)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(regions, indent=1), encoding="utf-8")
+    """Save into the active table profile (stamps its date)."""
+    region_profiles.set_ocr(resolution, regions)
 
 
 def delete_regions(resolution):
-    path = regions_path(resolution)
-    if path.exists():
-        path.unlink()
+    region_profiles.delete_ocr(resolution)
 
 
 # ----------------------------------------------------------------- reading

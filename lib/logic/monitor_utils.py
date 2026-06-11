@@ -2,12 +2,12 @@
 
 matplotlib is gone: point-in-polygon is a few lines of numpy ray casting.
 
-Region sources, in priority order: a user-calibrated profile saved per
-resolution (output/regions_{w}x{h}.json, written by the region editor),
-falling back to BASE_PLAYER_REGIONS scaled from the base resolution.
+Region sources, in priority order: the ACTIVE table profile's calibration
+for this resolution (lib/logic/region_profiles.py, written by the region
+editor), falling back to BASE_PLAYER_REGIONS scaled from the base
+resolution.
 """
 
-import json
 import threading
 
 import numpy as np
@@ -18,6 +18,7 @@ except ImportError:
     from mss import mss as _MSS
 
 from ..common import constants
+from . import region_profiles
 
 
 class Polygon:
@@ -107,41 +108,35 @@ def scaling_factors(current_resolution):
 
 # ----------------------------------------------- calibrated region profiles
 
-def regions_path(resolution):
-    w, h = resolution
-    return constants.OUTPUT_DIR / f"regions_{w}x{h}.json"
-
-
 def load_custom_regions(resolution):
-    """{"players": [[[x,y],...], ...], "dealer": [l,t,r,b]} or None.
-    Coordinates are native to `resolution` (no scaling applied)."""
-    path = regions_path(resolution)
-    if not path.exists():
-        return None
+    """{"players": [[[x,y],...], ...], "dealer": [l,t,r,b]} or None — the
+    ACTIVE table profile's calibration. Coordinates are native to
+    `resolution` (no scaling applied)."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = region_profiles.get_regions(resolution)
+        if data is None:
+            return None
         players = data["players"]
         dealer = data["dealer"]
         if (len(players) != constants.NUM_SEATS or len(dealer) != 4
                 or any(len(poly) < 3 for poly in players)):
             raise ValueError("wrong shape")
         return {"players": players, "dealer": [int(v) for v in dealer]}
-    except (OSError, ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
         print(f"Calibrated regions unreadable ({e}); using defaults.")
         return None
 
 
-def save_custom_regions(resolution, players, dealer):
-    path = regions_path(resolution)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"players": players, "dealer": list(dealer)},
-                               indent=1), encoding="utf-8")
+def save_custom_regions(resolution, players, dealer, profile=None):
+    """Save into the named table profile (the active one when None);
+    saving stamps the profile's date and makes it active."""
+    region_profiles.set_regions(
+        resolution, {"players": players, "dealer": list(dealer)},
+        profile=profile)
 
 
 def delete_custom_regions(resolution):
-    path = regions_path(resolution)
-    if path.exists():
-        path.unlink()
+    region_profiles.delete_regions(resolution)
 
 
 def default_player_regions(current_resolution):

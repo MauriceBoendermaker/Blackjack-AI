@@ -265,6 +265,26 @@ class ModernBlackjackGUI(tk.Tk):
     def _build_controls_section(self, parent):
         section = self._section(parent, "Controls")
 
+        # Table profile: named region calibrations (seat/dealer + OCR rects)
+        # per casino table. Selecting one swaps every region live.
+        row = tk.Frame(section, bg=C["bg_secondary"])
+        row.pack(fill=tk.X)
+        tk.Label(row, text="Table profile", font=constants.FONT_BODY,
+                 bg=C["bg_secondary"], fg=C["text_secondary"]
+                 ).pack(anchor="w")
+        self.profile_var = tk.StringVar()
+        self.profile_combo = ttk.Combobox(section, textvariable=self.profile_var,
+                                          state="readonly", font=constants.FONT_BODY)
+        self.profile_combo.pack(fill=tk.X, pady=(0, 8))
+        self.profile_combo.bind("<<ComboboxSelected>>",
+                                lambda e: self._select_profile())
+        ToolTip(self.profile_combo,
+                "Saved region calibrations per casino table — switching swaps "
+                "the seat, dealer and OCR regions. Save a new one from "
+                "Calibrate Regions.")
+        self._profile_by_label = {}
+        self._refresh_profiles()
+
         self.start_btn = self._button(
             section, "▶  Start Detection", self._toggle_detection,
             C["success"], hover=C["success_hover"],
@@ -461,6 +481,31 @@ class ModernBlackjackGUI(tk.Tk):
         self.ocr_btn.config(state="normal")
         self.set_status(f"Monitor {idx + 1} confirmed ({self.monitor.width}x{self.monitor.height}).")
 
+    def _refresh_profiles(self):
+        """Rebuild the table-profile dropdown — '<name> — <saved date>'."""
+        from ..logic import region_profiles
+        active = region_profiles.active_name()
+        labels, self._profile_by_label, current = [], {}, 0
+        for i, item in enumerate(region_profiles.list_profiles()):
+            date = (item["saved"] or "")[:10]
+            label = f"{item['name']} — {date}" if date else item["name"]
+            labels.append(label)
+            self._profile_by_label[label] = item["name"]
+            if item["name"] == active:
+                current = i
+        self.profile_combo["values"] = labels
+        self.profile_combo.current(current)
+
+    def _select_profile(self):
+        from ..logic import region_profiles
+        name = self._profile_by_label.get(self.profile_var.get())
+        if not name or not region_profiles.set_active(name):
+            return
+        if self.monitor is not None:
+            # Reloads seat/dealer/OCR regions and refreshes the OCR hint.
+            self._confirm_monitor()
+        self.set_status(f"Table profile \"{name}\" active — regions reloaded.")
+
     def _toggle_detection(self):
         if self.controller.running:
             self.controller.stop()
@@ -468,6 +513,9 @@ class ModernBlackjackGUI(tk.Tk):
                                   activebackground=C["success_hover"])
             self.start_btn._base_bg = C["success"]
             self.monitor_combo.config(state="readonly")
+            self.profile_combo.config(state="readonly")
+            self.calibrate_btn.config(state="normal")
+            self.ocr_btn.config(state="normal")
             self.set_status("Detection stopped.")
             return
         if self.monitor is None:
@@ -477,8 +525,13 @@ class ModernBlackjackGUI(tk.Tk):
         self.start_btn.config(text="■  Stop Detection", bg=C["danger"],
                               activebackground=C["danger_hover"])
         self.start_btn._base_bg = C["danger"]
-        # Switching monitors mid-run would race the in-flight capture cycle.
+        # Switching monitors or table profiles mid-run would race the
+        # in-flight capture cycle — and the calibrate editors can switch
+        # the profile too (Save as profile), so they lock with it.
         self.monitor_combo.config(state="disabled")
+        self.profile_combo.config(state="disabled")
+        self.calibrate_btn.config(state="disabled")
+        self.ocr_btn.config(state="disabled")
         self.set_status("Detection starting — initializing models...")
 
     def _new_round(self):
@@ -580,6 +633,9 @@ class ModernBlackjackGUI(tk.Tk):
                                   activebackground=C["success_hover"])
             self.start_btn._base_bg = C["success"]
             self.monitor_combo.config(state="readonly")
+            self.profile_combo.config(state="readonly")
+            self.calibrate_btn.config(state="normal")
+            self.ocr_btn.config(state="normal")
 
     def _render(self, snap):
         self._sync_money_entries(snap)
@@ -785,9 +841,20 @@ class ModernBlackjackGUI(tk.Tk):
             return
         from .region_editor import RegionEditor
 
-        def reload_regions():
-            self.controller.set_monitor(self.monitor)
-            self.set_status("Regions saved — detection now uses the calibrated layout.")
+        def reload_regions(saved=True):
+            # _confirm_monitor reloads all regions AND refreshes the
+            # sidebar's "OCR not calibrated" hint (a save into a NEW
+            # profile has no OCR rects yet).
+            self._confirm_monitor()
+            self._refresh_profiles()  # a new/updated profile (and its date)
+            from ..logic import region_profiles
+            name = region_profiles.active_name()
+            if saved:
+                self.set_status(f"Regions saved to profile \"{name}\" — "
+                                "detection now uses the calibrated layout.")
+            else:
+                self.set_status(f"Calibration removed from profile \"{name}\""
+                                " — using the shipped default layout.")
 
         try:
             RegionEditor(self, self.controller.engine.capture, on_save=reload_regions)
@@ -805,7 +872,8 @@ class ModernBlackjackGUI(tk.Tk):
         from .ocr_region_editor import OcrRegionEditor
 
         def reload_regions():
-            self.controller.set_monitor(self.monitor)
+            self._confirm_monitor()   # reload + refresh the OCR hint
+            self._refresh_profiles()  # OCR saves restamp the profile date
             self.set_status("OCR regions saved — balance/bet/result now read "
                             "from the screen.")
 

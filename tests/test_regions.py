@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from lib.common import constants
-from lib.logic import monitor_utils
+from lib.logic import monitor_utils, region_profiles
 
 
 class RegionProfiles(unittest.TestCase):
@@ -53,12 +53,14 @@ class RegionProfiles(unittest.TestCase):
         self.assertIsNone(monitor_utils.load_custom_regions(self.RES))
 
     def test_corrupt_or_wrong_shape_falls_back(self):
-        path = monitor_utils.regions_path(self.RES)
+        path = region_profiles.store_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("{broken", encoding="utf-8")
         self.assertIsNone(monitor_utils.load_custom_regions(self.RES))
-        path.write_text('{"players": [[[1,2],[3,4],[5,6]]], "dealer": [1,2,3,4]}',
-                        encoding="utf-8")  # wrong seat count
+        # Wrong seat count inside an otherwise valid store entry.
+        region_profiles.set_regions(
+            self.RES, {"players": [[[1, 2], [3, 4], [5, 6]]],
+                       "dealer": [1, 2, 3, 4]})
         self.assertIsNone(monitor_utils.load_custom_regions(self.RES))
         self.assertEqual(len(monitor_utils.scaled_player_regions(self.RES)),
                          constants.NUM_SEATS)

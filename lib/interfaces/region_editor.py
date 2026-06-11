@@ -1,18 +1,20 @@
 """Interactive region calibration (Feature 10).
 
 A live screenshot of the selected monitor with the seat polygons and dealer
-rectangle drawn on top; every vertex is a draggable handle. Saving writes a
-per-resolution profile (output/regions_{w}x{h}.json) that monitor_utils picks
-up over the shipped defaults, then the engine reloads its regions.
+rectangle drawn on top; every vertex is a draggable handle. Saving writes
+the layout into a NAMED table profile (the name field, prefilled with the
+active profile) — saving a new name creates that profile and makes it
+active; the engine then reloads its regions.
 """
 
 import tkinter as tk
+from tkinter import messagebox
 
 import cv2
 from PIL import Image, ImageTk
 
 from ..common import constants
-from ..logic import monitor_utils
+from ..logic import monitor_utils, region_profiles
 
 C = constants.COLORS
 HANDLE = 5  # handle radius in canvas px
@@ -78,6 +80,15 @@ class RegionEditor(tk.Toplevel):
                       fg="white" if bg != C["warning"] else C["text_primary"],
                       relief="flat", padx=14, pady=6, font=constants.FONT_BODY,
                       cursor="hand2").pack(side=tk.RIGHT, padx=4)
+        # Save target: a table profile by name. Prefilled with the active
+        # profile; typing a new name creates it (and makes it active).
+        self.profile_var = tk.StringVar(value=region_profiles.active_name())
+        entry = tk.Entry(bar, textvariable=self.profile_var, width=18,
+                         font=constants.FONT_BODY)
+        entry.pack(side=tk.RIGHT, padx=(12, 2))
+        tk.Label(bar, text="Save as profile:", bg=C["bg_primary"],
+                 fg=C["text_secondary"], font=constants.FONT_BODY
+                 ).pack(side=tk.RIGHT)
 
         self._redraw()
         self.grab_set()
@@ -148,13 +159,22 @@ class RegionEditor(tk.Toplevel):
         (x1, y1), (x2, y2) = self.dealer
         dealer = [int(min(x1, x2) / self.scale), int(min(y1, y2) / self.scale),
                   int(max(x1, x2) / self.scale), int(max(y1, y2) / self.scale)]
-        monitor_utils.save_custom_regions(self.resolution, players, dealer)
+        monitor_utils.save_custom_regions(self.resolution, players, dealer,
+                                          profile=self.profile_var.get())
         if self.on_save:
             self.on_save()
         self.destroy()
 
     def _reset(self):
+        # Reset targets the ACTIVE profile (the typed save-as name is a save
+        # target only) — name it and confirm before destroying a calibration.
+        active = region_profiles.active_name()
+        if not messagebox.askyesno(
+                "Reset to defaults",
+                f"Remove the calibrated layout of profile \"{active}\" for "
+                "this resolution and use the shipped defaults?", parent=self):
+            return
         monitor_utils.delete_custom_regions(self.resolution)
         if self.on_save:
-            self.on_save()
+            self.on_save(False)
         self.destroy()
