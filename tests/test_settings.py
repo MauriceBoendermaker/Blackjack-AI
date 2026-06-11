@@ -72,6 +72,7 @@ class AppSettingsRoundTrip(unittest.TestCase):
     """ui/app/ocr sections from the settings dialog's App tab."""
 
     _ATTRS = ("EMPTY_FRAMES_FOR_RESET", "CUTTING_CARD_CONFIRM_FRAMES",
+              "DEALER_USE_PLAYER_MODEL",
               "EV_ADVICE_TIMEOUT_S", "IDLE_REFRESH_GAP_S", "SNAPSHOT_POLL_MS")
 
     def setUp(self):

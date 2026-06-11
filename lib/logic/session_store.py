@@ -97,7 +97,13 @@ class SessionStore:
                  json.dumps(snapshot.get("side_bets", [])),
                  json.dumps(settle) if settle else None,
                  settle.get("my_units") if settle else None,
-                 settle.get("my_eur") if settle else None,
+                 # The booked round total incl. side bets — stats() and the
+                 # Monte Carlo P&L sample must match what the session P&L
+                 # and the auto-settled bankroll actually received. NULL
+                 # stays NULL for rounds without owned-seat money.
+                 (settle.get("my_eur", 0) or 0)
+                 + (settle.get("my_side_eur", 0) or 0)
+                 if settle and "my_eur" in settle else None,
                  snapshot.get("bet_placed"), paytable_hash))
 
     # ---------------------------------------------------------- shoe state

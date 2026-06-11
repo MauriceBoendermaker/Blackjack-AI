@@ -25,6 +25,8 @@ _APP_ATTRS = {
     "EV_ADVICE_TIMEOUT_S": (float, 1.0, 10.0),
     "IDLE_REFRESH_GAP_S": (float, 10.0, 600.0),
     "SNAPSHOT_POLL_MS": (int, 60, 500),
+    # Bool as 0/1: suit-aware dealer detection via the 52-class card model.
+    "DEALER_USE_PLAYER_MODEL": (int, 0, 1),
 }
 # OCR keys editable from the dialog (interval_s stays code-configured).
 _OCR_TOGGLES = ("enabled", "sync_bankroll", "sync_bet")
@@ -37,7 +39,8 @@ def snapshot() -> dict:
         "deck_count": constants.DECK_COUNT,
         "base_bet": constants.BASE_BET,
         "betting": dict(constants.BETTING),
-        "side_bets": {key: {"enabled": bool(cfg.get("enabled"))}
+        "side_bets": {key: {"enabled": bool(cfg.get("enabled")),
+                            "stake": float(cfg.get("stake") or 0.0)}
                       for key, cfg in constants.SIDE_BETS.items()},
         "ui": dict(constants.UI),
         "app": {name: getattr(constants, name) for name in _APP_ATTRS},
@@ -63,8 +66,15 @@ def apply(data: dict):
             except (TypeError, ValueError):
                 pass
     for key, cfg in data.get("side_bets", {}).items():
-        if key in constants.SIDE_BETS and "enabled" in cfg:
+        if key not in constants.SIDE_BETS:
+            continue
+        if "enabled" in cfg:
             constants.SIDE_BETS[key]["enabled"] = bool(cfg["enabled"])
+        if "stake" in cfg:
+            try:
+                constants.SIDE_BETS[key]["stake"] = max(0.0, float(cfg["stake"]))
+            except (TypeError, ValueError):
+                pass
     ui = data.get("ui", {})
     if "scale" in ui:
         try:

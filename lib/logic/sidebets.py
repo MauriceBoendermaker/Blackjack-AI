@@ -61,15 +61,24 @@ def _is_straight(p1, p2, p3):
 
 # ----------------------------------------------------------- 2-card bets
 
-def ev_perfect_pairs(comp52, paytable):
-    """Player's first two cards: perfect (identical), colored, mixed pair."""
+def _finish_moments(win, m2, p_win):
+    """(ev, variance) per unit from accumulated win EV, second moment of the
+    win branches, and total win probability. The loss branch is exactly -1
+    per unit (no pushes in these paytables), so E[X^2] adds (1-p_win)*1."""
+    ev = win - (1.0 - p_win)
+    variance = m2 + (1.0 - p_win) - ev * ev
+    return ev, max(0.0, variance)
+
+
+def moments_perfect_pairs(comp52, paytable):
+    """(ev, variance) per unit for Perfect Pairs; None when too depleted.
+    Player's first two cards: perfect (identical), colored, mixed pair."""
     red = ("Hearts", "Diamonds")
     n_total = sum(comp52.values())
     if n_total < 2:
         return None
     pair_div = n_total * (n_total - 1) / 2.0
-    win = 0.0
-    p_win = 0.0
+    win = m2 = p_win = 0.0
     by_rank = {}
     for (r, s), n in comp52.items():
         if n > 0:
@@ -79,25 +88,32 @@ def ev_perfect_pairs(comp52, paytable):
             same = n1 * (n1 - 1) / 2.0 / pair_div
             p_win += same
             win += same * paytable["perfect"]
+            m2 += same * paytable["perfect"] ** 2
             for s2, n2 in suited[i + 1:]:
                 p = n1 * n2 / pair_div
                 p_win += p
-                colored = (s1 in red) == (s2 in red)
-                win += p * paytable["colored" if colored else "mixed"]
-    return win - (1.0 - p_win)
+                pay = paytable["colored" if (s1 in red) == (s2 in red) else "mixed"]
+                win += p * pay
+                m2 += p * pay ** 2
+    return _finish_moments(win, m2, p_win)
 
 
-def ev_lucky_ladies(comp52, paytable):
-    """Player's two cards total 20; Queen-of-Hearts tiers, with the QH-pair +
-    dealer-blackjack tier resolved via the conditional dealer-BJ probability
-    over the two dealer cards drawn from the remainder."""
+def ev_perfect_pairs(comp52, paytable):
+    moments = moments_perfect_pairs(comp52, paytable)
+    return None if moments is None else moments[0]
+
+
+def moments_lucky_ladies(comp52, paytable):
+    """(ev, variance) per unit. Player's two cards total 20; Queen-of-Hearts
+    tiers, with the QH-pair + dealer-blackjack tier resolved via the
+    conditional dealer-BJ probability over the two dealer cards drawn from
+    the remainder."""
     n_total = sum(comp52.values())
     if n_total < 4:
         return None
     pair_div = n_total * (n_total - 1) / 2.0
     cells = [(cell, n) for cell, n in comp52.items() if n > 0]
-    ev = 0.0
-    p_win = 0.0
+    win = m2 = p_win = 0.0
 
     def dealer_bj_prob(removed_qh):
         n = n_total - 2
@@ -116,16 +132,26 @@ def ev_lucky_ladies(comp52, paytable):
             qh_pair = r1 == r2 == "Queen" and s1 == s2 == "Hearts"
             if qh_pair:
                 p_bj = dealer_bj_prob(removed_qh=2)
-                ev += p * (p_bj * paytable["qh_pair_dealer_bj"]
-                           + (1 - p_bj) * paytable["qh_pair"])
-            elif r1 == r2 and s1 == s2:
-                ev += p * paytable["matched_20"]
-            elif s1 == s2:
-                ev += p * paytable["suited_20"]
+                win += p * (p_bj * paytable["qh_pair_dealer_bj"]
+                            + (1 - p_bj) * paytable["qh_pair"])
+                m2 += p * (p_bj * paytable["qh_pair_dealer_bj"] ** 2
+                           + (1 - p_bj) * paytable["qh_pair"] ** 2)
             else:
-                ev += p * paytable["any_20"]
+                if r1 == r2 and s1 == s2:
+                    pay = paytable["matched_20"]
+                elif s1 == s2:
+                    pay = paytable["suited_20"]
+                else:
+                    pay = paytable["any_20"]
+                win += p * pay
+                m2 += p * pay ** 2
             p_win += p
-    return ev - (1.0 - p_win)
+    return _finish_moments(win, m2, p_win)
+
+
+def ev_lucky_ladies(comp52, paytable):
+    moments = moments_lucky_ladies(comp52, paytable)
+    return None if moments is None else moments[0]
 
 
 # ----------------------------------------------------------- 3-card bets
@@ -184,9 +210,9 @@ _THREE_CARD_CLASSIFIERS = {
 }
 
 
-def ev_three_card(comp52, bet_key, paytable):
-    """Shared engine for 21+3 / Hot 3 / Lucky Lucky: enumerate the player's
-    two cards (unordered) x the dealer up-card over the composition."""
+def moments_three_card(comp52, bet_key, paytable):
+    """(ev, variance) per unit. Shared engine for 21+3 / Hot 3 / Lucky Lucky:
+    enumerate the player's two cards (unordered) x the dealer up-card."""
     classify = _THREE_CARD_CLASSIFIERS[bet_key]
     cells = _cell_arrays(comp52)
     n_total = sum(c[0] for c in cells)
@@ -194,8 +220,7 @@ def ev_three_card(comp52, bet_key, paytable):
         return None
     pair_div = n_total * (n_total - 1) / 2.0
     third_div = n_total - 2.0
-    ev = 0.0
-    p_win = 0.0
+    win = m2 = p_win = 0.0
     for i, (n1, p1, v1, s1, r1) in enumerate(cells):
         for j in range(i, len(cells)):
             n2, p2, v2, s2, r2 = cells[j]
@@ -218,9 +243,15 @@ def ev_three_card(comp52, bet_key, paytable):
                 if cls is None:
                     continue
                 p = p_pair * m / third_div
-                ev += p * paytable[cls]
+                win += p * paytable[cls]
+                m2 += p * paytable[cls] ** 2
                 p_win += p
-    return ev - (1.0 - p_win)
+    return _finish_moments(win, m2, p_win)
+
+
+def ev_three_card(comp52, bet_key, paytable):
+    moments = moments_three_card(comp52, bet_key, paytable)
+    return None if moments is None else moments[0]
 
 
 # ------------------------------------------------------------- Bust It
@@ -259,25 +290,33 @@ def _bust_len_dist(comp, total, soft, ncards, s17):
     return tuple(acc)
 
 
-def ev_bust_it(comp10, paytable, s17=None):
-    """Evolution Bust It: dealer busts -> pays by bust-hand length. The dealer
-    always plays out the hand (Infinite Blackjack rule), so no BJ/peek terms.
-    comp10 = the ev_engine 10-bucket composition (pre-deal, dealer cards
-    still in the shoe)."""
+def moments_bust_it(comp10, paytable, s17=None):
+    """(ev, variance) per unit for Evolution Bust It: dealer busts -> pays by
+    bust-hand length. The dealer always plays out the hand (Infinite
+    Blackjack rule), so no BJ/peek terms. comp10 = the ev_engine 10-bucket
+    composition (pre-deal, dealer cards still in the shoe)."""
     if s17 is None:
         s17 = constants.RULES["s17"]
     if sum(comp10) < 10:
         return None
     dist = _bust_len_dist(tuple(comp10), 0, False, 0, bool(s17))
-    ev = sum(dist[k - 3] * paytable[k] for k in range(3, 9))
-    return ev - dist[6]
+    win = sum(dist[k - 3] * paytable[k] for k in range(3, 9))
+    m2 = sum(dist[k - 3] * paytable[k] ** 2 for k in range(3, 9))
+    return _finish_moments(win, m2, 1.0 - dist[6])
+
+
+def ev_bust_it(comp10, paytable, s17=None):
+    moments = moments_bust_it(comp10, paytable, s17)
+    return None if moments is None else moments[0]
 
 
 # ------------------------------------------------------------- top level
 
 def evaluate_all(comp52, comp10, side_bets=None):
-    """EV per enabled side bet. Returns [{key, label, ev}] (ev may be None
-    when the shoe is too depleted to evaluate)."""
+    """EV + variance per enabled side bet. Returns [{key, label, ev,
+    variance}] (ev/variance are None when the shoe is too depleted). The
+    variance feeds Kelly stake sizing — paytables run to 100x-1000x, so
+    variances of order 10^2-10^3 correctly yield tiny stakes."""
     if side_bets is None:
         side_bets = constants.SIDE_BETS
     out = []
@@ -286,14 +325,16 @@ def evaluate_all(comp52, comp10, side_bets=None):
             continue
         paytable = cfg["paytable"]
         if key == "perfect_pairs":
-            ev = ev_perfect_pairs(comp52, paytable)
+            moments = moments_perfect_pairs(comp52, paytable)
         elif key in _THREE_CARD_CLASSIFIERS:
-            ev = ev_three_card(comp52, key, paytable)
+            moments = moments_three_card(comp52, key, paytable)
         elif key == "bust_it":
-            ev = ev_bust_it(comp10, paytable)
+            moments = moments_bust_it(comp10, paytable)
         elif key == "lucky_ladies":
-            ev = ev_lucky_ladies(comp52, paytable)
+            moments = moments_lucky_ladies(comp52, paytable)
         else:
             continue
-        out.append({"key": key, "label": cfg.get("label", key), "ev": ev})
+        ev, variance = moments if moments is not None else (None, None)
+        out.append({"key": key, "label": cfg.get("label", key), "ev": ev,
+                    "variance": variance})
     return out

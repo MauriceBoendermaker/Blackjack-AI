@@ -234,7 +234,7 @@ class SettlementE2E(unittest.TestCase):
         self.clear_table()
         # Seat A: 20 vs 19 wins (+1u, mine, EUR 50); seat B: 17 loses.
         self.assertEqual(eng.session_pnl,
-                         {"units": 1.0, "eur": 50.0, "rounds": 1})
+                         {"units": 1.0, "eur": 50.0, "side_eur": 0.0, "rounds": 1})
 
         # ---- Round 2 (b): my natural pays 3:2 ----------------------------
         deal2 = [
@@ -251,7 +251,7 @@ class SettlementE2E(unittest.TestCase):
         # Natural 21 vs dealer 17: +1.5u at EUR 50 = +75; B's 18 also won
         # but is not mine, so only the blackjack books.
         self.assertEqual(eng.session_pnl,
-                         {"units": 2.5, "eur": 125.0, "rounds": 2})
+                         {"units": 2.5, "eur": 125.0, "side_eur": 0.0, "rounds": 2})
 
         # ---- Round 3 (c): dealer busts; reset held by lingering up-card --
         deal3 = [
@@ -270,7 +270,7 @@ class SettlementE2E(unittest.TestCase):
         self.clear_table(lingering_up=up3)
         # Both seats beat the bust; only seat A is mine.
         self.assertEqual(eng.session_pnl,
-                         {"units": 3.5, "eur": 175.0, "rounds": 3})
+                         {"units": 3.5, "eur": 175.0, "side_eur": 0.0, "rounds": 3})
         # The dealer-area recheck held the reset and said so once, at INFO.
         delays = self.logged("delayed")
         self.assertEqual(len(delays), 1)
@@ -284,7 +284,7 @@ class SettlementE2E(unittest.TestCase):
         self.assertEqual(len(self.logged(" settled (dealer ")), 3)
         snap = eng.get_snapshot()
         self.assertEqual(snap["session_pnl"],
-                         {"units": 3.5, "eur": 175.0, "rounds": 3})
+                         {"units": 3.5, "eur": 175.0, "side_eur": 0.0, "rounds": 3})
         self.assertEqual(snap["round"], 4)
 
         # ---- Persisted rounds: settlement details + P&L columns ----------

@@ -46,10 +46,12 @@ PREDICTION_OVERLAP_DEALER = 45
 API_UPLOAD_MAX_WIDTH = 1280
 
 # Run the 52-class (suit-aware) player model on the dealer crop instead of the
-# rank-only dealer model. Gives dealer suits to the composition; validate the
-# player model's accuracy on dealer-area imagery before enabling. The cutting
-# card only exists in the rank model, so it is still checked every Nth cycle.
-DEALER_USE_PLAYER_MODEL = False
+# rank-only dealer model. Gives dealer suits to the composition AND decides
+# the suited/flush tiers of the 3-card side bets; toggleable live from the
+# settings App tab if its accuracy on dealer-area imagery disappoints. The
+# cutting card only exists in the rank model, so it is still checked every
+# Nth cycle.
+DEALER_USE_PLAYER_MODEL = True
 CUTTING_CARD_CHECK_EVERY = 5
 # Cutting-card sightings on consecutive checked frames (position-quantized,
 # like dealer hits) before the reshuffle flag latches — one misread must not
@@ -111,6 +113,10 @@ SAME_CARD_DISTANCE_PX = 80
 # Cards beyond the first two per seat (hits) must be seen in this many
 # consecutive cycles before they are accepted.
 EXTRA_CARD_CONFIRM_CYCLES = 2
+# A pending DEALER draw survives this many missed cycles before it is
+# dropped (the dealer's hand briefly occludes cards mid-draw; a hard
+# consecutive requirement made fast playouts lose cards).
+DEALER_PENDING_MISS_TOLERANCE = 2
 # Dealer card must agree across this many consecutive frames to lock.
 DEALER_CONFIRM_FRAMES = 2
 MAX_CARDS_PER_SEAT = 6
@@ -176,32 +182,34 @@ OCR = {
 # Defaults = Evolution live blackjack. House edges (8 decks, full shoe):
 # Perfect Pairs 4.10%, 21+3 3.70%, Hot 3 5.40%, Bust It 6.18% — all verified
 # against wizardofodds.com. Lucky Lucky / Lucky Ladies are off-Evolution bets,
-# disabled by default; enable per table.
+# disabled by default; enable per table. "stake" is the EUR amount the user
+# actually places per owned seat (0 = not playing it); settlement books
+# stake x paytable into the session P&L.
 SIDE_BETS = {
     "perfect_pairs": {
-        "label": "Perfect Pairs", "enabled": True,
+        "label": "Perfect Pairs", "enabled": True, "stake": 0.0,
         "paytable": {"perfect": 25, "colored": 12, "mixed": 6},
     },
     "21+3": {
-        "label": "21+3", "enabled": True,
+        "label": "21+3", "enabled": True, "stake": 0.0,
         "paytable": {"suited_trips": 100, "straight_flush": 40, "trips": 30,
                      "straight": 10, "flush": 5},
     },
     "hot3": {
-        "label": "Hot 3", "enabled": True,
+        "label": "Hot 3", "enabled": True, "stake": 0.0,
         "paytable": {"777": 100, "suited_21": 20, "21": 4, "20": 2, "19": 1},
     },
     "bust_it": {
-        "label": "Bust It", "enabled": True,
+        "label": "Bust It", "enabled": True, "stake": 0.0,
         "paytable": {3: 1, 4: 2, 5: 9, 6: 50, 7: 100, 8: 250},  # 8 = 8+ cards
     },
     "lucky_lucky": {
-        "label": "Lucky Lucky", "enabled": False,
+        "label": "Lucky Lucky", "enabled": False, "stake": 0.0,
         "paytable": {"suited_777": 200, "suited_678": 100, "777": 50, "678": 30,
                      "suited_21": 15, "21": 3, "20": 2, "19": 2},
     },
     "lucky_ladies": {
-        "label": "Lucky Ladies", "enabled": False,
+        "label": "Lucky Ladies", "enabled": False, "stake": 0.0,
         "paytable": {"qh_pair_dealer_bj": 1000, "qh_pair": 125, "matched_20": 19,
                      "suited_20": 9, "any_20": 4},
     },

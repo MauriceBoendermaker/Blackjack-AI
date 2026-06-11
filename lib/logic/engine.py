@@ -32,6 +32,7 @@ from . import ocr
 from . import seat_quality
 from . import settlement
 from . import shoe
+from . import sidebet_outcomes
 from . import sidebets
 from .counting import CardCounter, counter_key
 from .models import ModelProvider, ModelError
@@ -95,7 +96,13 @@ class DetectionEngine:
         self._reshuffle_dismissed = False  # badge hidden; the flag itself stays
         self.my_seats = set()            # seat indices whose P&L the user tracks
         self.bet_placed = float(constants.BASE_BET)  # EUR per owned seat this round
-        self.session_pnl = {"units": 0.0, "eur": 0.0, "rounds": 0}
+        # "eur" is the total incl. side bets; "side_eur" breaks them out.
+        self.session_pnl = {"units": 0.0, "eur": 0.0, "side_eur": 0.0,
+                            "rounds": 0}
+        # Side-bet stakes frozen at the round's first card (bets are
+        # immutable once dealing starts — a stake edited mid-round must not
+        # change what THIS round settles for). None until the first card.
+        self._round_stakes = None
         # Rounds whose bet suggestion hit the table max (session-scoped). The
         # latch collapses the many snapshots a round publishes into one tick,
         # consumed at round end in _reset_round_state.
@@ -277,6 +284,23 @@ class DetectionEngine:
 
         with self._lock:
             activity = self._activity()
+            if (activity == "complete" and self.dealer_locked
+                    and self._empty_frames == 0):
+                extras = [c["rank"] for c in self.dealer_extras]
+                all_bust = all(
+                    cards.hand_value([c["name"] for c in s.cards]) > 21
+                    for s in self.seats if s.cards)
+                if (not settlement.dealer_final(self.dealer_card, extras)[2]
+                        and not all_bust):
+                    # The dealer is still drawing: sample at the fast
+                    # "dealing" cadence — playout draws land seconds apart
+                    # and the slow "complete" pace missed cards. All-bust
+                    # rounds skip this (the dealer doesn't draw then), and
+                    # a clearing table (_empty_frames) drops back to the
+                    # slow pace even if a missed draw left the hand
+                    # incomplete. (Only the pacing/status string changes;
+                    # _maybe_auto_new_round keeps using _activity().)
+                    activity = "dealing"
         self._last_activity = activity
         self._metrics["cycle_ms"] = (time.perf_counter() - t0) * 1000.0
         self._metrics["skipped"] = skipped
@@ -412,7 +436,11 @@ class DetectionEngine:
 
     def _track_dealer_playout(self, cards_seen):
         """Count the dealer's hole/hit cards after the up-card locks. Same
-        machinery as player hits: position dedupe + multi-cycle confirmation."""
+        machinery as player hits — position dedupe + multi-cycle
+        confirmation — but with MISS TOLERANCE: the dealer's hand briefly
+        occludes cards mid-draw, and a hard consecutive-sighting rule made
+        fast playouts lose cards. A pending draw survives
+        DEALER_PENDING_MISS_TOLERANCE missed cycles before it is dropped."""
         limit_same = constants.SAME_CARD_DISTANCE_PX * self._dist_scale
         seen_pending = set()
         for p in cards_seen:
@@ -420,16 +448,21 @@ class DetectionEngine:
                 continue
             key = (p["rank"], round(p["cx"] / 50.0), round(p["cy"] / 50.0))
             seen_pending.add(key)
-            count = self._pending_dealer.get(key, 0) + 1
-            if count >= constants.EXTRA_CARD_CONFIRM_CYCLES:
+            hits, _ = self._pending_dealer.get(key, (0, 0))
+            hits += 1
+            if hits >= constants.EXTRA_CARD_CONFIRM_CYCLES:
                 self.dealer_extras.append({"rank": p["rank"], "cx": p["cx"], "cy": p["cy"]})
                 self.counter.count_card(p["rank"])
                 self._pending_dealer.pop(key, None)
                 self.log(f"Dealer draws: {p['rank']}")
             else:
-                self._pending_dealer[key] = count
+                self._pending_dealer[key] = (hits, 0)  # a sighting resets misses
         for key in [k for k in self._pending_dealer if k not in seen_pending]:
-            del self._pending_dealer[key]
+            hits, misses = self._pending_dealer[key]
+            if misses + 1 > constants.DEALER_PENDING_MISS_TOLERANCE:
+                del self._pending_dealer[key]
+            else:
+                self._pending_dealer[key] = (hits, misses + 1)
 
     def _matches_dealer_card(self, pred, limit_same):
         """Is this detection the up-card or an already-counted playout card?
@@ -451,6 +484,22 @@ class DetectionEngine:
             if dx * dx + dy * dy < limit_flicker * limit_flicker:
                 return True  # same spot, different class = misread flicker
         for c in self.dealer_extras:
+            if c["cx"] is None:
+                # Manually added draw without a screen position: a detection
+                # of the same card IS this card — adopt the position so
+                # normal dedup applies from here (mirrors seat cards). With
+                # suits on both sides the names must match EXACTLY: a
+                # rank-only comparison would swallow a genuinely different
+                # same-rank draw (5♥ added manually eats a detected 5♠).
+                pred_name, c_name = str(pred["rank"]), str(c["rank"])
+                if " of " in pred_name and " of " in c_name:
+                    same = pred_name == c_name
+                else:
+                    same = cards.rank_of(pred_name) == cards.rank_of(c_name)
+                if same:
+                    c["cx"], c["cy"] = pred["cx"], pred["cy"]
+                    return True
+                continue
             dx, dy = c["cx"] - pred["cx"], c["cy"] - pred["cy"]
             dist_sq = dx * dx + dy * dy
             if pred["rank"] == c["rank"] and dist_sq < limit_same * limit_same:
@@ -555,7 +604,17 @@ class DetectionEngine:
                 return True  # never fight a manual correction at this position
         return False
 
+    def _capture_round_stakes(self):
+        """Freeze the staked side bets the moment the round's first card
+        lands. Called under self._lock from every card-adding path."""
+        if self._round_stakes is None:
+            self._round_stakes = {
+                key: float(cfg.get("stake") or 0.0)
+                for key, cfg in constants.SIDE_BETS.items()
+                if cfg.get("enabled") and float(cfg.get("stake") or 0.0) > 0}
+
     def _lock_card(self, seat, pred):
+        self._capture_round_stakes()
         hand = self._assign_hand(seat, pred["cx"]) if seat.split else 0
         seat.cards.append({
             "name": pred["name"], "confidence": pred["confidence"],
@@ -682,6 +741,7 @@ class DetectionEngine:
             # OCR bankroll syncs persist once per round, not per read.
             self._settings_dirty = False
             self._io_pool.submit(self._save_settings_job)
+        self._round_stakes = None  # next round freezes at its first card
         self.round_number += 1
         if self.cutting_card_seen:
             self.log("Reminder: cutting card was seen — reset the shoe count after the shuffle.")
@@ -763,6 +823,7 @@ class DetectionEngine:
                             self.training.save_sample, self._last_frame,
                             old["cx"], old["cy"], card_name, "correction")
             elif card_name is not None and len(seat.cards) < constants.MAX_CARDS_PER_SEAT:
+                self._capture_round_stakes()
                 if seat.split and hand_index in (0, 1):
                     hand = hand_index
                 else:
@@ -814,6 +875,57 @@ class DetectionEngine:
                 self.log("Dealer card cleared.")
         self.publish_snapshot()
 
+    def add_dealer_extra(self, card_name, expected_round=None):
+        """Manually record a dealer draw the detector missed. Position-less
+        like manual seat cards; a later detection of the same card adopts
+        the screen position (see _matches_dealer_card). `expected_round`
+        guards a picker left open across an auto round reset — a stale pick
+        must not plant a phantom draw in the NEXT round's dealer hand."""
+        with self._lock:
+            if expected_round is not None and expected_round != self.round_number:
+                self.log("Correction discarded — the round changed while the picker was open.")
+                return
+            if not self.dealer_locked or not card_name:
+                return
+            self.dealer_extras.append({"rank": card_name, "cx": None, "cy": None})
+            self.counter.count_card(card_name)
+        self.log(f"Dealer draw added manually: {card_name}.")
+        self.publish_snapshot()
+
+    def replace_dealer_extra(self, idx, card_name, expected_round=None):
+        """Correct a tracked dealer draw (card_name=None removes it)."""
+        with self._lock:
+            if expected_round is not None and expected_round != self.round_number:
+                self.log("Correction discarded — the round changed while the picker was open.")
+                return
+            if not 0 <= idx < len(self.dealer_extras):
+                return
+            old = self.dealer_extras[idx]
+            self.counter.uncount_card(old["rank"])
+            if card_name is None:
+                self.dealer_extras.pop(idx)
+                self.log(f"Dealer draw {old['rank']} removed.")
+            else:
+                self.dealer_extras[idx] = {**old, "rank": card_name}
+                self.counter.count_card(card_name)
+                self.log(f"Dealer draw corrected to {card_name}.")
+        self.publish_snapshot()
+
+    def set_side_bet_stake(self, key, eur):
+        """EUR the user actually places on this side bet per owned seat
+        (0 = not playing it). Settlement books stake x paytable."""
+        cfg = constants.SIDE_BETS.get(key)
+        if cfg is None:
+            return
+        eur = max(0.0, float(eur))
+        with self._lock:
+            if eur == float(cfg.get("stake") or 0.0):
+                return
+            cfg["stake"] = eur
+        self.log(f"{cfg.get('label', key)} stake set to €{eur:g}.")
+        self.persist_settings_async()
+        self.publish_snapshot()
+
     def adjust_counter(self, rank_key, delta):
         self.counter.adjust_manual(rank_key, delta)
         self.publish_snapshot()
@@ -833,6 +945,14 @@ class DetectionEngine:
             if snap["dealer"]["card"]:
                 self.log(f"Round {self.round_number} not settled — "
                          "dealer hand incomplete.")
+            if self._round_stakes and self.my_seats:
+                # Decided side bets exist even in refused rounds (a Perfect
+                # Pair needs no dealer hand) — booking only on settled
+                # rounds keeps the P&L semantics whole, but the user must
+                # know money went unbooked.
+                self.log("Staked side bets not booked — the round itself "
+                         "did not settle; adjust the bankroll manually if "
+                         "they paid.", level="WARNING")
             return None
 
         parts = [f"P{s['index'] + 1} {s['net_units']:+g}u" for s in settle["seats"]]
@@ -855,6 +975,8 @@ class DetectionEngine:
         if mine:
             units = sum(s["net_units"] for s in mine)
             eur = units * self.bet_placed
+            side_eur, side_detail = self._settle_side_bets(snap)
+            settle["side_bets"] = side_detail
             # Cross-check against a recent OCR'd result banner (your result).
             banner = self._ocr_last.get("result")
             if banner and time.time() - self._ocr_last.get("ts", 0) < 30:
@@ -864,16 +986,69 @@ class DetectionEngine:
                     self.log(f"⚠ Result banner says '{banner}' but settlement "
                              f"computed {units:+g}u — check for a misread card.")
             self.session_pnl["units"] += units
-            self.session_pnl["eur"] += eur
+            self.session_pnl["eur"] += eur + side_eur
+            self.session_pnl["side_eur"] += side_eur
             self.session_pnl["rounds"] += 1
             settle["my_units"] = units
             settle["my_eur"] = eur
-            if constants.BETTING.get("auto_bankroll") and eur:
-                constants.BETTING["bankroll"] = max(0.0, constants.BETTING["bankroll"] + eur)
-                self.log(f"Bankroll {eur:+.2f} EUR -> {constants.BETTING['bankroll']:g} "
+            settle["my_side_eur"] = side_eur
+            total_eur = eur + side_eur
+            if constants.BETTING.get("auto_bankroll") and total_eur:
+                constants.BETTING["bankroll"] = max(0.0, constants.BETTING["bankroll"] + total_eur)
+                self.log(f"Bankroll {total_eur:+.2f} EUR -> {constants.BETTING['bankroll']:g} "
                          "(auto-settled)")
                 self._io_pool.submit(self._save_settings_job)
         return settle
+
+    def _settle_side_bets(self, snap):
+        """(eur_delta, per-seat detail) for the user's staked side bets on
+        owned seats — at the stakes FROZEN when the round's first card
+        landed, not the live entry values (bets close at the deal). Same
+        honesty rule as the main settlement: an outcome the detections
+        can't decide is skipped (and logged), never guessed."""
+        staked = self._round_stakes if self._round_stakes is not None else {}
+        if not staked:
+            return 0.0, {}
+        dealer_up = snap["dealer"]["card"]
+        extras = snap["dealer"].get("extras", [])
+        total = 0.0
+        detail = {}
+        for seat in snap["seats"]:
+            if seat["index"] not in self.my_seats or len(seat["cards"]) < 2:
+                continue
+            outcomes = sidebet_outcomes.seat_outcomes(
+                seat["cards"][:2], dealer_up, extras)
+            entries = {}
+            for key, stake in staked.items():
+                outcome = outcomes.get(key)
+                if outcome is None:
+                    # 3-card bets with no detected up-card never resolve —
+                    # say so instead of silently dropping staked money.
+                    self.log(f"P{seat['index'] + 1} "
+                             f"{constants.SIDE_BETS[key].get('label', key)} "
+                             "not settled — no dealer up-card detected.",
+                             level="WARNING")
+                    continue
+                if outcome["result"] == "unknown":
+                    self.log(f"P{seat['index'] + 1} "
+                             f"{constants.SIDE_BETS[key].get('label', key)} "
+                             f"not settled — {outcome.get('reason', 'undecidable')}.",
+                             level="WARNING")
+                    continue
+                eur = (stake * outcome["pays"] if outcome["result"] == "win"
+                       else -stake)
+                total += eur
+                entries[key] = {**outcome, "stake": stake, "eur": eur}
+                if outcome["result"] == "win":
+                    self.log(f"P{seat['index'] + 1} "
+                             f"{constants.SIDE_BETS[key].get('label', key)}: "
+                             f"{sidebet_outcomes.tier_label(outcome['tier'])} "
+                             f"pays {outcome['pays']:g}:1 -> +€{eur:.2f}")
+            if entries:
+                detail[seat["index"]] = entries
+        if total:
+            self.log(f"Side bets settled: {total:+.2f} EUR")
+        return total, detail
 
     @staticmethod
     def _save_settings_job():
@@ -1372,15 +1547,20 @@ class DetectionEngine:
     def publish_snapshot(self):
         with self._lock:
             dealer_rank = self.dealer_card
+            dealer_extra_ranks = [c["rank"] for c in self.dealer_extras]
             count = self.counter.snapshot()
             ev_count = self._ev_count(count)
             insurance = self._insurance_advice(dealer_rank, ev_count["per_rank"])
             seats = []
             for seat in self.seats:
                 names = [c["name"] for c in seat.cards]
+                outcomes = sidebet_outcomes.seat_outcomes(
+                    names[:2], dealer_rank, dealer_extra_ranks)
                 if seat.split:
-                    seats.append(self._split_seat_snapshot(
-                        seat, names, dealer_rank, ev_count, count["true"]))
+                    snap_seat = self._split_seat_snapshot(
+                        seat, names, dealer_rank, ev_count, count["true"])
+                    snap_seat["side_outcomes"] = outcomes
+                    seats.append(snap_seat)
                     continue
                 action, text, color = self.strategy.advice(names, dealer_rank)
                 optimal, optimal_color, optimal_action = self._optimal_advice(
@@ -1417,6 +1597,16 @@ class DetectionEngine:
                     "optimal_action": optimal_action,
                     "index_advice": index_text,
                     "index_color": index_color,
+                    "side_outcomes": outcomes,
+                })
+            side_bet_items = []
+            for item in self._side_bet_evs(ev_count):
+                cfg = constants.SIDE_BETS.get(item["key"], {})
+                side_bet_items.append({
+                    **item,
+                    "stake": float(cfg.get("stake") or 0.0),
+                    "stake_suggested": betting.side_bet_stake(
+                        item.get("ev"), item.get("variance")),
                 })
             suggestion = betting.suggest(count["true"],
                                          exact_edge=self._predeal_edge(ev_count))
@@ -1428,9 +1618,9 @@ class DetectionEngine:
                 "seq": 0,
                 "seats": seats,
                 "dealer": {"card": dealer_rank, "locked": self.dealer_locked,
-                           "extras": [c["rank"] for c in self.dealer_extras]},
+                           "extras": dealer_extra_ranks},
                 "insurance": insurance,
-                "side_bets": self._side_bet_evs(ev_count),
+                "side_bets": side_bet_items,
                 "count": count,
                 "bet": suggestion["text"],
                 "bet_behind": self._bet_behind_text(suggestion["edge"]),

@@ -390,22 +390,48 @@ class ModernBlackjackGUI(tk.Tk):
                  ).pack(anchor="w", pady=(4, 0))
 
     def _build_sidebets_section(self, parent):
-        """Live pre-deal EV per enabled side bet; green when the bet is +EV.
+        """Live pre-deal EV per enabled side bet; green when the bet is +EV
+        (with a Kelly-sized stake suggestion). The € entry is the stake you
+        actually place per owned seat — settlement books it into the P&L.
         Rows exist for every known bet and show/hide with the settings."""
-        section = self._section(parent, "Side Bets (EV per unit)")
+        section = self._section(parent, "Side Bets (EV per unit · € stake)")
         self.sidebet_rows = {}
+        self.sidebet_stake_vars = {}
         for key, cfg in constants.SIDE_BETS.items():
             row = tk.Frame(section, bg=C["bg_secondary"])
             if cfg.get("enabled"):
                 row.pack(fill=tk.X, pady=2)
             tk.Label(row, text=cfg.get("label", key), font=constants.FONT_BODY,
-                     width=14, anchor="w", bg=C["bg_secondary"],
+                     width=13, anchor="w", bg=C["bg_secondary"],
                      fg=C["text_secondary"]).pack(side=tk.LEFT)
+            stake_var = tk.StringVar(value=f"{cfg.get('stake') or 0:.10g}")
+            stake = tk.Entry(row, textvariable=stake_var, width=5,
+                             font=constants.FONT_BODY)
+            stake.pack(side=tk.RIGHT)
+            attach_numeric_entry(stake)
+            stake.bind("<Return>", lambda e, k=key: self._set_side_bet_stake(k))
+            stake.bind("<FocusOut>", lambda e, k=key: self._set_side_bet_stake(k))
+            ToolTip(stake, "Your stake on this bet per owned seat "
+                           "(0 = not playing it)")
+            self.sidebet_stake_vars[key] = stake_var
             var = tk.StringVar(value="—")
             lbl = tk.Label(row, textvariable=var, font=constants.FONT_BODY_BOLD,
                            anchor="w", bg=C["bg_secondary"], fg=C["text_primary"])
             lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.sidebet_rows[key] = (row, var, lbl)
+
+    def _set_side_bet_stake(self, key):
+        var = self.sidebet_stake_vars[key]
+        try:
+            value = float(var.get().replace(",", "."))
+        except ValueError:
+            var.set(f"{constants.SIDE_BETS[key].get('stake') or 0:.10g}")
+            return
+        if value > 10_000_000:
+            value = 10_000_000.0
+            var.set(f"{value:.10g}")
+        if value >= 0:
+            self.controller.engine.set_side_bet_stake(key, value)
 
     # ------------------------------------------------------------ table/status
 
@@ -415,7 +441,8 @@ class ModernBlackjackGUI(tk.Tk):
         wrapper.rowconfigure(0, weight=1)
         wrapper.columnconfigure(0, weight=1)
         self.table = TableView(wrapper, self._on_card_click, self._on_dealer_click,
-                               self._on_split_click, self._on_seat_name_click)
+                               self._on_split_click, self._on_seat_name_click,
+                               self._on_dealer_extra_click)
         self.table.canvas.grid(row=0, column=0, sticky="nsew")
 
     def _build_status_bar(self):
@@ -574,6 +601,26 @@ class ModernBlackjackGUI(tk.Tk):
         CardPicker(self, "Dealer up-card", self.table.card_image,
                    lambda name: self.controller.engine.replace_dealer(name))
 
+    def _on_dealer_extra_click(self, idx):
+        """Correct a tracked dealer draw, or add one the detector missed
+        (idx 99 comes from the '+' button). The round captured at picker
+        open guards against a stale pick landing after an auto reset."""
+        snap = self.controller.engine.get_snapshot()
+        extras = (snap["dealer"].get("extras") or []) if snap else []
+        round_at_click = snap["round"] if snap else None
+        if idx >= len(extras):
+            CardPicker(self, "Dealer draw — add missed card",
+                       self.table.card_image,
+                       lambda name: self.controller.engine.add_dealer_extra(
+                           name, expected_round=round_at_click),
+                       allow_remove=False)
+        else:
+            CardPicker(self, f"Dealer draw {idx + 1} — correct card",
+                       self.table.card_image,
+                       lambda name: self.controller.engine.replace_dealer_extra(
+                           idx, name, expected_round=round_at_click),
+                       allow_remove=True)
+
     def _preview_regions(self):
         if self._preview_busy or self.monitor is None:
             return
@@ -659,8 +706,10 @@ class ModernBlackjackGUI(tk.Tk):
         self.info_vars["behind"].set(snap.get("bet_behind", "—"))
         pnl = snap.get("session_pnl") or {}
         if pnl.get("rounds"):
-            self.info_vars["pnl"].set(
-                f"€{pnl['eur']:+.2f} ({pnl['units']:+g}u, {pnl['rounds']} rounds)")
+            text = f"€{pnl['eur']:+.2f} ({pnl['units']:+g}u, {pnl['rounds']} rounds)"
+            if pnl.get("side_eur"):
+                text += f" · side €{pnl['side_eur']:+.2f}"
+            self.info_vars["pnl"].set(text)
         else:
             self.info_vars["pnl"].set("— mark a seat as yours")
 
@@ -677,7 +726,13 @@ class ModernBlackjackGUI(tk.Tk):
                 var.set("—")
                 lbl.config(fg=C["text_secondary"])
             else:
-                var.set(f"{ev * 100:+.2f}%" + ("  ● BET" if ev > 0 else ""))
+                text = f"{ev * 100:+.2f}%"
+                if ev > 0:
+                    text += " ●"
+                    suggested = item.get("stake_suggested") or 0
+                    if suggested:  # Kelly-sized: tiny by construction
+                        text += f" €{suggested:g}"
+                var.set(text)
                 lbl.config(fg=C["success"] if ev > 0 else C["text_secondary"])
 
         if snap.get("reshuffle_badge"):

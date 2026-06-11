@@ -13,6 +13,7 @@ from PIL import Image, ImageTk
 from . import scaling
 from ..common import constants
 from ..logic import cards as cardlib
+from ..logic.sidebet_outcomes import tier_label
 
 C = constants.COLORS
 
@@ -32,7 +33,7 @@ def seat_positions(w, h, n, card_w, card_h):
     cx = w / 2.0
     anchor_y = 110.0 * s  # just below the dealer card's centre
     span = math.radians(110.0)
-    label_stack = (150.0 + 12.0) * s  # five label lines + bottom breathing room
+    label_stack = (168.0 + 12.0) * s  # six label lines + bottom breathing room
     # R from whichever constraint is tighter: the middle seat's label stack
     # above the bottom edge, or the edge seats inside the side margins
     # (40 px edge gap + half the 118 px optimal-label wraplength). Never so
@@ -53,11 +54,12 @@ def seat_positions(w, h, n, card_w, card_h):
 
 class TableView:
     def __init__(self, parent, on_card_click, on_dealer_click, on_split_click=None,
-                 on_seat_name_click=None):
+                 on_seat_name_click=None, on_dealer_extra_click=None):
         self.on_card_click = on_card_click
         self.on_dealer_click = on_dealer_click
         self.on_split_click = on_split_click or (lambda *a: None)
         self.on_seat_name_click = on_seat_name_click or (lambda *a: None)
+        self.on_dealer_extra_click = on_dealer_extra_click or (lambda *a: None)
 
         self.canvas = tk.Canvas(parent, bg=C["bg_canvas"], highlightthickness=0)
         self._image_cache = {}
@@ -76,9 +78,13 @@ class TableView:
         self.dealer_insurance = tk.Label(self.canvas, text="", font=constants.FONT_BODY_BOLD,
                                          bg=C["bg_canvas"], fg=C["text_on_felt"],
                                          wraplength=scaling.px(170), justify="left")
-        self.dealer_playout = tk.Label(self.canvas, text="", font=constants.FONT_SMALL,
-                                       bg=C["bg_canvas"], fg=C["text_on_felt"])
         self._dealer_rendered = "__none__"
+        # The dealer's playout draws as card images fanned left of the
+        # up-card (was a "Draws: ..." text line). Click corrects a draw;
+        # "+" adds one the detector missed.
+        self.dealer_extra_lbls = []
+        self._extras_rendered = []
+        self.dealer_add = None
 
         self.seats = []
         self._make_seats()
@@ -102,6 +108,9 @@ class TableView:
                 "index": tk.Label(self.canvas, text="", font=constants.FONT_SMALL,
                                   bg=C["bg_canvas"], fg=C["text_on_felt"],
                                   wraplength=scaling.px(118), justify="center"),
+                "sidebet": tk.Label(self.canvas, text="", font=constants.FONT_SMALL,
+                                    bg=C["bg_canvas"], fg=C["text_on_felt"],
+                                    wraplength=scaling.px(118), justify="center"),
                 "add": None,          # "+" button, created lazily
                 "split_btn": None,    # Split / Undo split badge, created lazily
                 "hand_of": [],        # per-card hand tag from the snapshot
@@ -185,9 +194,7 @@ class TableView:
         self.dealer_insurance.place(
             x=w / 2 + card_w_d / 2 + scaling.px(14), y=scaling.px(46) + card_h_d / 2,
             anchor="w")
-        self.dealer_playout.place(
-            x=w / 2 - card_w_d / 2 - scaling.px(14), y=scaling.px(46) + card_h_d / 2,
-            anchor="e")
+        self._place_dealer_extras()
 
         card_w, card_h = scaling.size(constants.CARD_RENDER_SIZE)
         positions = seat_positions(w, h, constants.NUM_SEATS, card_w, card_h)
@@ -220,7 +227,8 @@ class TableView:
         offset = scaling.px(44) + (scaling.px(18) if "\n" in seat["advice"].cget("text") else 0)
         seat["optimal"].place(x=x, y=base_y + offset, anchor="n")
         seat["index"].place(x=x, y=base_y + offset + scaling.px(18), anchor="n")
-        seat["name"].place(x=x, y=base_y + offset + scaling.px(36), anchor="n")
+        seat["sidebet"].place(x=x, y=base_y + offset + scaling.px(36), anchor="n")
+        seat["name"].place(x=x, y=base_y + offset + scaling.px(54), anchor="n")
         if seat["add"] is not None:
             seat["add"].place(x=x + card_w / 2 + scaling.px(54 if split else 14),
                               y=top + card_h / 2, anchor="w")
@@ -234,11 +242,13 @@ class TableView:
         cache so the next CardPicker open doesn't pay 52 cold renders."""
         self._image_cache.clear()
         self._dealer_rendered = "__none__"
+        self._extras_rendered = ["__none__"] * len(self._extras_rendered)
         self.dealer_insurance.config(wraplength=scaling.px(170))
         for seat in self.seats:
             seat["rendered"] = ["__none__"] * len(seat["rendered"])
             seat["optimal"].config(wraplength=scaling.px(118))
             seat["index"].config(wraplength=scaling.px(118))
+            seat["sidebet"].config(wraplength=scaling.px(118))
         if self._last_snapshot is not None:
             self.update(self._last_snapshot)
         self._relayout()
@@ -269,13 +279,73 @@ class TableView:
                 or self.dealer_insurance.cget("fg") != ins_color):
             self.dealer_insurance.config(text=ins_text, fg=ins_color)
 
-        extras = snapshot["dealer"].get("extras") or []
-        playout = "Draws: " + ", ".join(extras) if extras else ""
-        if self.dealer_playout.cget("text") != playout:
-            self.dealer_playout.config(text=playout)
+        self._update_dealer_extras(snapshot)
 
         for seat_snap in snapshot["seats"]:
             self._update_seat(seat_snap)
+
+    def _update_dealer_extras(self, snapshot):
+        """Render the dealer's playout draws as clickable card images."""
+        extras = snapshot["dealer"].get("extras") or []
+        layout_dirty = len(extras) != len(self.dealer_extra_lbls)
+        while len(self.dealer_extra_lbls) < len(extras):
+            lbl = tk.Label(self.canvas, bg=C["bg_canvas"], bd=0, cursor="hand2")
+            idx = len(self.dealer_extra_lbls)
+            lbl.bind("<Button-1>",
+                     lambda e, i=idx: self.on_dealer_extra_click(i))
+            self.dealer_extra_lbls.append(lbl)
+            self._extras_rendered.append("__none__")
+        for surplus in self.dealer_extra_lbls[len(extras):]:
+            surplus.destroy()
+        del self.dealer_extra_lbls[len(extras):]
+        del self._extras_rendered[len(extras):]
+
+        for i, name in enumerate(extras):
+            if self._extras_rendered[i] != name:
+                self._extras_rendered[i] = name
+                # Rank-only draws render a representative card, like the
+                # up-card does.
+                full = name if " of " in str(name) else f"{name} of Spades"
+                photo = self.card_image(full)
+                self.dealer_extra_lbls[i].config(image=photo)
+                self.dealer_extra_lbls[i].image = photo
+
+        want_add = bool(snapshot["dealer"].get("locked"))
+        if want_add and self.dealer_add is None:
+            btn = tk.Label(self.canvas, text="+", font=constants.FONT_BODY_BOLD,
+                           bg=C["bg_canvas_soft"], fg=C["text_on_felt"],
+                           width=2, cursor="hand2")
+            btn.bind("<Button-1>",
+                     lambda e: self.on_dealer_extra_click(99))
+            self.dealer_add = btn
+            layout_dirty = True
+        elif not want_add and self.dealer_add is not None:
+            self.dealer_add.destroy()
+            self.dealer_add = None
+        if layout_dirty:
+            self._place_dealer_extras()
+
+    def _place_dealer_extras(self):
+        """Fan the playout cards leftward from the up-card; later draws sit
+        UNDER earlier ones so each card's top-left rank corner stays
+        visible. The "+" add button trails the fan."""
+        if self._preview_item is not None:
+            return
+        w = self.canvas.winfo_width()
+        if w < 50:
+            return
+        card_w_d, card_h_d = scaling.size(constants.DEALER_CARD_RENDER_SIZE)
+        card_w, card_h = scaling.size(constants.CARD_RENDER_SIZE)
+        x = w / 2 - card_w_d / 2 - scaling.px(14)
+        y = scaling.px(46) + card_h_d - card_h  # bottom-aligned with up-card
+        for lbl in self.dealer_extra_lbls:
+            lbl.place(x=x, y=y, anchor="ne")
+            x -= scaling.px(22)
+        for lbl in reversed(self.dealer_extra_lbls):
+            lbl.lift()  # first draw on top, nearest the up-card
+        if self.dealer_add is not None:
+            self.dealer_add.place(x=x - scaling.px(6) - (card_w if self.dealer_extra_lbls else 0),
+                                  y=y + card_h / 2, anchor="e")
 
     def _update_seat(self, snap):
         i = snap["index"]
@@ -322,6 +392,20 @@ class TableView:
         idx_color = snap.get("index_color", C["text_on_felt"])
         if seat["index"].cget("text") != idx_text or seat["index"].cget("fg") != idx_color:
             seat["index"].config(text=idx_text, fg=idx_color)
+
+        # Side-bet outcomes: wins (green) and undecidable ones ("?"); losses
+        # stay silent to keep the table calm.
+        parts, any_win = [], False
+        for o in (snap.get("side_outcomes") or {}).values():
+            if o["result"] == "win":
+                any_win = True
+                parts.append(f"{o['label']}: {tier_label(o['tier'])} {o['pays']:g}x")
+            elif o["result"] == "unknown":
+                parts.append(f"{o['label']}: ?")
+        sb_text = " · ".join(parts)
+        sb_color = C["warning"] if any_win else C["text_on_felt"]
+        if seat["sidebet"].cget("text") != sb_text or seat["sidebet"].cget("fg") != sb_color:
+            seat["sidebet"].config(text=sb_text, fg=sb_color)
 
         want_add = 2 <= len(snap["cards"]) < constants.MAX_CARDS_PER_SEAT
         if want_add and seat["add"] is None:
@@ -375,7 +459,7 @@ class TableView:
         for seat in self.seats:
             for lbl in seat["cards"]:
                 lbl.place_forget()
-            for key in ("name", "total", "advice", "optimal", "index"):
+            for key in ("name", "total", "advice", "optimal", "index", "sidebet"):
                 seat[key].place_forget()
             if seat["add"] is not None:
                 seat["add"].place_forget()
@@ -384,7 +468,10 @@ class TableView:
         self.dealer_title.place_forget()
         self.dealer_card_lbl.place_forget()
         self.dealer_insurance.place_forget()
-        self.dealer_playout.place_forget()
+        for lbl in self.dealer_extra_lbls:
+            lbl.place_forget()
+        if self.dealer_add is not None:
+            self.dealer_add.place_forget()
         self._preview_item = self.canvas.create_image(w / 2, h / 2, image=self._preview_photo)
         self._preview_close_btn = tk.Button(
             self.canvas, text="Close preview", command=lambda: (self.clear_preview(), on_close()),
@@ -403,6 +490,7 @@ class TableView:
         self._relayout()
         # Force a re-render of everything that was hidden.
         self._dealer_rendered = "__none__"
+        self._extras_rendered = ["__none__"] * len(self._extras_rendered)
         for seat in self.seats:
             seat["rendered"] = ["__none__"] * len(seat["rendered"])
         if self._last_snapshot is not None:

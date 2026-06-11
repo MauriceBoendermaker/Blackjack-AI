@@ -51,6 +51,20 @@ def suggest(true_count, betting=None, exact_edge=None) -> dict:
             "capped": capped}
 
 
+def side_bet_stake(ev, variance, betting=None) -> float:
+    """Fractional-Kelly stake (EUR) for one side bet; 0 when not +EV.
+
+    Independent-Kelly approximation: ignores the correlation with the
+    simultaneous main bet and between side bets sharing the same cards
+    (21+3 and Perfect Pairs both ride the player's first two) — fine at
+    these stake sizes, where the huge paytable variance (10^2-10^3 units^2)
+    keeps the Kelly fraction tiny by construction."""
+    b = betting or constants.BETTING
+    if not ev or not variance or ev <= 0 or variance <= 0:
+        return 0.0
+    return round(b["bankroll"] * b["kelly_fraction"] * ev / variance, 2)
+
+
 def bet_behind_hint(true_count, betting=None) -> str:
     """Bet Behind is the main game by proxy: same edge, someone else's plays."""
     edge = estimate_edge(true_count, betting)
