@@ -15,3 +15,11 @@ pytest
 # ultralytics
 # Or export to ONNX (model.export(format="onnx")) for ~3x CPU speed, no torch:
 # onnxruntime
+
+# Optional: CDP click path for the assisted executor (frees the physical
+# cursor). OS SendInput via ctypes works without it. Start Chrome with
+# --remote-debugging-port=9222 and enable "Click via CDP" in Settings.
+# playwright
+
+# The Claude vision assist (calibration bootstrap + screen triage) uses the
+# plain REST API through `requests` — no extra dependency, just an API key.

@@ -245,6 +245,25 @@ class SettingsDialog(tk.Toplevel):
                           "Detect game phase (bets open / your turn)", "bool",
                           None, constants.PHASE["enabled"])
 
+        row = self._heading(tab, row, "Executor limits (ghost / assist)")
+        row = self._spin(tab, row, "executor:max_bet_eur",
+                         "Max bet per action (€)", 0, 100_000,
+                         int(constants.EXECUTOR["max_bet_eur"]))
+        row = self._spin(tab, row, "executor:stop_loss_eur",
+                         "Stop-loss: disarm beyond session −€", 0, 1_000_000,
+                         int(constants.EXECUTOR["stop_loss_eur"]))
+        row = self._spin(tab, row, "executor:stop_win_eur",
+                         "Stop-win: disarm beyond session +€ (0 = off)", 0,
+                         1_000_000, int(constants.EXECUTOR["stop_win_eur"]))
+        row = self._entry(tab, row, "executor:chips",
+                          "Table chips (comma-separated €)",
+                          ", ".join(f"{c:g}" for c in
+                                    constants.EXECUTOR["chips"]))
+        row = self._field(tab, row, "executor:use_cdp",
+                          "Click via CDP (needs playwright + Chrome "
+                          "--remote-debugging-port)", "bool", None,
+                          constants.EXECUTOR["use_cdp"])
+
         row = self._heading(tab, row, "Claude vision assist (optional)")
         row = self._field(tab, row, "vision:enabled",
                           "Enable (calibration suggestions + screen triage)",
@@ -316,7 +335,8 @@ class SettingsDialog(tk.Toplevel):
 
     def _save(self):
         data = {"rules": {}, "side_bets": {}, "betting": {}, "ui": {},
-                "app": {}, "ocr": {}, "phase": {}, "vision": {}}
+                "app": {}, "ocr": {}, "phase": {}, "vision": {},
+                "executor": {}}
         for key, spec in self._vars.items():
             if key.startswith("sidebet:"):
                 data["side_bets"][key.split(":", 1)[1]] = {"enabled": bool(spec.get())}
@@ -339,6 +359,10 @@ class SettingsDialog(tk.Toplevel):
                 name = key.split(":", 1)[1]
                 data["vision"][name] = (value if kind == "str"
                                         else int(value))
+            elif key.startswith("executor:"):
+                name = key.split(":", 1)[1]
+                data["executor"][name] = (value if kind == "str"
+                                          else int(value))
             elif key == "ui:scale":
                 data["ui"]["scale"] = value
             elif key in ("deck_count", "base_bet"):

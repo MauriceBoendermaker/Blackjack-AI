@@ -220,6 +220,39 @@ PHASE = {
     "discipline_grace_s": 3.0,
 }
 
+# Ghost-mode executor / one-key assisted execute (V4 Feature 2 —
+# AUTONOMY_PLAN.md stages 1-2; stage 3 full unattended autonomy is
+# deliberately NOT implemented). Mode and limits persist in settings.json;
+# the ARM state NEVER persists — every session starts disarmed.
+EXECUTOR = {
+    "mode": "off",             # off | ghost | assist
+    # Stricter than the display threshold: acting needs the phase confirmed
+    # across this many consecutive cycles AND the button matched this well.
+    "confirm_frames": 3,
+    "min_button_score": 0.80,
+    # Money limits — any breach auto-disarms (never silently clamps).
+    "max_bet_eur": 50.0,
+    "stop_loss_eur": 200.0,    # session net loss beyond this disarms
+    "stop_win_eur": 0.0,       # 0 = no stop-win
+    "max_actions_per_round": 6,
+    "balance_tolerance_eur": 25.0,  # OCR balance vs bankroll divergence
+    "verify_timeout_s": 4.0,   # post-click confirmation deadline
+    # A confirm against a snapshot older than this is refused — a stalled
+    # or stopped worker must never leave a fireable frozen MY_TURN.
+    "max_snapshot_age_s": 2.5,
+    # Chip denominations available at the table (bet-plan decomposition).
+    "chips": [0.5, 1, 5, 25, 100, 500],
+    # Click delivery: OS SendInput (stdlib ctypes) is the default; the CDP
+    # path needs `pip install playwright` and Chrome started with
+    # --remote-debugging-port. Falls back to OS input when CDP fails.
+    "use_cdp": 0,
+    "cdp_port": 9222,
+    "cdp_url_match": "evolution",
+    # Global hotkeys (virtual-key codes): F8 confirm, F9 kill switch.
+    "confirm_vk": 0x77,
+    "kill_vk": 0x78,
+}
+
 # Claude vision assist (optional, hybrid per design decision: the per-frame
 # hot loop stays local; the API is only used for one-shot calibration
 # bootstrap and unknown-state triage). Uses the plain REST API via

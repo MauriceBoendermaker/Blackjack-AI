@@ -50,6 +50,12 @@ def snapshot() -> dict:
         # ANTHROPIC_API_KEY overrides it without touching the file.
         "vision": {key: constants.VISION[key]
                    for key in ("enabled", "api_key", "model", "triage")},
+        # Mode and limits persist; the ARM state never does (it lives only
+        # in the running Executor and resets every session by design).
+        "executor": {key: constants.EXECUTOR[key]
+                     for key in ("mode", "max_bet_eur", "stop_loss_eur",
+                                 "stop_win_eur", "chips", "use_cdp",
+                                 "cdp_port", "cdp_url_match")},
     }
 
 
@@ -111,6 +117,45 @@ def apply(data: dict):
         constants.VISION["api_key"] = str(vision["api_key"] or "")
     if "model" in vision and str(vision["model"] or "").strip():
         constants.VISION["model"] = str(vision["model"]).strip()
+    executor = data.get("executor", {})
+    if executor.get("mode") in ("off", "ghost", "assist"):
+        constants.EXECUTOR["mode"] = executor["mode"]
+    for key, hi in (("max_bet_eur", 100_000.0), ("stop_loss_eur", 1_000_000.0),
+                    ("stop_win_eur", 1_000_000.0)):
+        if key in executor:
+            try:
+                constants.EXECUTOR[key] = max(0.0, min(hi, float(executor[key])))
+            except (TypeError, ValueError):
+                pass
+    if "use_cdp" in executor:
+        constants.EXECUTOR["use_cdp"] = int(bool(executor["use_cdp"]))
+    if "cdp_port" in executor:
+        try:
+            constants.EXECUTOR["cdp_port"] = max(1, min(65535,
+                                                        int(executor["cdp_port"])))
+        except (TypeError, ValueError):
+            pass
+    if "cdp_url_match" in executor:
+        constants.EXECUTOR["cdp_url_match"] = str(executor["cdp_url_match"] or "")
+    if "chips" in executor:
+        # Accept a list or a comma-separated string ("0.5, 1, 5, 25").
+        # Per-token parsing: a trailing comma or one stray token must not
+        # silently discard the user's whole new chip set.
+        raw = executor["chips"]
+        parts = raw.split(",") if isinstance(raw, str) else (raw or [])
+        chips = set()
+        for token in parts:
+            text = str(token).strip().replace("€", "")
+            if not text:
+                continue
+            try:
+                value = float(text.replace(",", "."))
+            except ValueError:
+                continue
+            if value > 0:
+                chips.add(value)
+        if chips:
+            constants.EXECUTOR["chips"] = sorted(chips)
 
 
 # Serializes concurrent writers (the engine io thread and the Tk thread):

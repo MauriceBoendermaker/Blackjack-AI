@@ -44,6 +44,24 @@ CREATE TABLE IF NOT EXISTS shoe_state (
     cutting_card_seen INTEGER,
     state TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS executor_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    session_id TEXT NOT NULL,
+    round INTEGER,
+    mode TEXT,
+    phase TEXT,
+    action TEXT,
+    seat INTEGER,
+    target_x INTEGER,
+    target_y INTEGER,
+    confidence REAL,
+    fired INTEGER,
+    verified INTEGER,
+    observed TEXT,
+    reason TEXT,
+    crop TEXT
+);
 """
 
 
@@ -105,6 +123,69 @@ class SessionStore:
                  + (settle.get("my_side_eur", 0) or 0)
                  if settle and "my_eur" in settle else None,
                  snapshot.get("bet_placed"), paytable_hash))
+
+    # ------------------------------------------------------- executor audit
+
+    def record_executor(self, entry: dict):
+        """One executor decision/click for after-the-fact review (V4
+        Feature 2 audit trail). `entry` keys mirror the executor's plan:
+        round, mode, phase, action, seat, target (x, y), confidence,
+        fired/verified flags, observed action, reason, crop path. Callers
+        submit through the engine's io pool (single SQLite writer)."""
+        target = entry.get("target") or (None, None)
+        with self._conn() as con:
+            con.execute(
+                "INSERT INTO executor_log (ts, session_id, round, mode,"
+                " phase, action, seat, target_x, target_y, confidence,"
+                " fired, verified, observed, reason, crop)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (time.time(), self.session_id, entry.get("round"),
+                 entry.get("mode"), entry.get("phase"), entry.get("action"),
+                 entry.get("seat"), target[0], target[1],
+                 entry.get("confidence"),
+                 int(bool(entry.get("fired"))),
+                 (None if entry.get("verified") is None
+                  else int(bool(entry.get("verified")))),
+                 entry.get("observed"), entry.get("reason"),
+                 entry.get("crop")))
+
+    def update_executor_verify(self, round_number, phase_name, action,
+                               verified, observed=None, seat=None):
+        """Stamp the verification outcome onto the latest matching FIRED
+        row (the click is recorded when confirmed; the outcome lands
+        seconds later). fired=1 + the seat predicate keep a newer
+        merely-planned row for the same action from absorbing the stamp."""
+        with self._conn() as con:
+            row = con.execute(
+                "SELECT id FROM executor_log WHERE session_id = ? AND"
+                " round = ? AND phase = ? AND action = ? AND fired = 1"
+                " AND (seat = ? OR (seat IS NULL AND ? IS NULL))"
+                " ORDER BY id DESC LIMIT 1",
+                (self.session_id, round_number, phase_name, action,
+                 seat, seat)).fetchone()
+            if row is None:
+                return
+            con.execute(
+                "UPDATE executor_log SET verified = ?, observed = ?"
+                " WHERE id = ?",
+                (int(bool(verified)), observed, row[0]))
+
+    def executor_stats(self, session_only: bool = True) -> dict:
+        """Ghost/assist telemetry: the honest gate before arming assist
+        (AUTONOMY_PLAN §6). verified=NULL rows are still-pending or
+        never-judged plans and stay out of the match rate."""
+        where = "WHERE session_id = ?" if session_only else ""
+        args = (self.session_id,) if session_only else ()
+        with self._conn() as con:
+            plans, fired, judged, matched = con.execute(
+                # A confirmed decision writes a planned row AND a fired row;
+                # counting fired rows as plans would double-count it.
+                f"SELECT COALESCE(SUM(fired = 0), 0), COALESCE(SUM(fired), 0),"
+                f" COUNT(verified), COALESCE(SUM(verified), 0)"
+                f" FROM executor_log {where}", args).fetchone()
+        return {"plans": plans, "fired": fired, "judged": judged,
+                "matched": matched,
+                "match_rate": matched / judged if judged else None}
 
     # ---------------------------------------------------------- shoe state
 

@@ -51,6 +51,21 @@ class ModernBlackjackGUI(tk.Tk):
         self._last_seq = -1
         self._preview_busy = False
 
+        # Ghost-mode executor (V4 Feature 2): a second consumer of the same
+        # snapshot. step() runs in the render path (pure dict math); clicks
+        # only ever fire from the confirm hotkey in assist mode.
+        engine = self.controller.engine
+        from ..logic.executor import Executor
+        self.executor = Executor(
+            snapshot_fn=engine.get_snapshot,
+            monitor_fn=lambda: self.monitor,
+            store=engine.store,
+            io_submit=engine.submit_io,
+            log=log_manager.add_log if log_manager else print,
+            running_fn=lambda: self.controller.running)
+        self.ghost_marker = None
+        self._hotkeys = None
+
         # Row 0 nav bar, row 1 sidebar + table (the stretchy row), row 2 status.
         self.columnconfigure(0, weight=0, minsize=scaling.px(340))
         self.columnconfigure(1, weight=1)
@@ -199,6 +214,7 @@ class ModernBlackjackGUI(tk.Tk):
 
         self._build_monitor_section(inner)
         self._build_controls_section(inner)
+        self._build_executor_section(inner)
         self._build_counters_section(inner)
         self._build_game_info_section(inner)
         self._build_sidebets_section(inner)
@@ -324,6 +340,151 @@ class ModernBlackjackGUI(tk.Tk):
                     "spot as templates — powers phase & turn detection")
         self.controls_btn.pack(fill=tk.X, pady=4)
         self.controls_btn.config(state="disabled")
+
+    def _build_executor_section(self, parent):
+        """Ghost-mode executor controls (V4 Feature 2). Ghost draws where it
+        WOULD click and logs the would-click match rate; Assist additionally
+        fires on the F8 confirm key — after the §6 ghost gate, never before."""
+        section = self._section(parent, "Executor (ghost / assist)")
+        self.exec_mode_var = tk.StringVar()
+        self._exec_mode_by_label = {"Off": "off", "Ghost (plan only)": "ghost",
+                                    "Assist (F8 fires)": "assist"}
+        combo = ttk.Combobox(section, textvariable=self.exec_mode_var,
+                             state="readonly", font=constants.FONT_BODY,
+                             values=list(self._exec_mode_by_label))
+        labels = {v: k for k, v in self._exec_mode_by_label.items()}
+        combo.set(labels.get(self.executor.mode, "Off"))
+        combo.pack(fill=tk.X, pady=(0, 4))
+        combo.bind("<<ComboboxSelected>>", lambda e: self._set_executor_mode())
+        ToolTip(combo,
+                "Ghost: computes and draws the click it WOULD make, clicks "
+                "nothing, logs the match rate. Assist: a single F8 press "
+                "fires the planned click — arm only after a long, "
+                "near-perfect ghost sample.")
+        self.arm_btn = self._button(
+            section, "⚪  ARM", self._toggle_arm, C["text_secondary"],
+            tooltip="Master safety. Off every session start; auto-disarms "
+                    "on any guard breach. F9 = kill switch, mouse in a "
+                    "screen corner = abort.")
+        self.arm_btn.pack(fill=tk.X, pady=4)
+        self.arm_btn.config(state="disabled")
+        self.exec_status_var = tk.StringVar(value="Off — advisory only.")
+        tk.Label(section, textvariable=self.exec_status_var,
+                 font=constants.FONT_SMALL, bg=C["bg_secondary"],
+                 fg=C["text_secondary"], wraplength=240, justify="left"
+                 ).pack(anchor="w")
+        tk.Label(section, text="F8 confirm · F9 kill · corner = abort",
+                 font=constants.FONT_SMALL, bg=C["bg_secondary"],
+                 fg=C["text_secondary"]).pack(anchor="w", pady=(2, 0))
+        if self.executor.mode == "assist":
+            # Restored from settings: hotkeys live, but NEVER armed at start.
+            self.arm_btn.config(state="normal")
+            self._start_hotkeys()
+
+    def _set_executor_mode(self):
+        mode = self._exec_mode_by_label.get(self.exec_mode_var.get(), "off")
+        self.executor.set_mode(mode)
+        self.controller.engine.persist_settings_async()
+        self.arm_btn.config(state="normal" if mode == "assist" else "disabled")
+        if mode == "assist":
+            self._start_hotkeys()
+        else:
+            self._stop_hotkeys()
+            self._hide_marker()
+        if mode == "off":
+            self.exec_status_var.set("Off — advisory only.")
+
+    def _refresh_executor_ui(self):
+        """Immediate executor display sync — the master safety indicator
+        must reflect arm/disarm THE MOMENT it changes, not at the next
+        snapshot poll."""
+        self._render_executor(
+            self.executor.step(self.controller.engine.get_snapshot()))
+
+    def _toggle_arm(self):
+        if self.executor.armed:
+            self.executor.disarm("manual disarm")
+            self._refresh_executor_ui()
+            return
+        if not self.controller.running:
+            self.exec_status_var.set("Cannot arm — start detection first.")
+            return
+        stats = self.executor.stats() or {}
+        rate = stats.get("match_rate")
+        sample = (f"{stats.get('judged', 0)} judged plans, "
+                  + (f"{rate:.0%} verified" if rate is not None
+                     else "no verified sample yet"))
+        if not messagebox.askyesno(
+                "ARM executor",
+                "Assist mode clicks REAL buttons with REAL money when you "
+                f"press F8.\n\nGhost telemetry this session: {sample}.\n"
+                "AUTONOMY_PLAN §6: arm only after a long ghost sample with "
+                "a near-perfect match rate.\n\nArm now?",
+                icon="warning", parent=self):
+            return
+        self.executor.arm()
+        self._refresh_executor_ui()
+
+    # Hotkeys fire on a watcher thread; marshal to the Tk thread.
+
+    def _start_hotkeys(self):
+        if self._hotkeys is not None and self._hotkeys.running:
+            return
+        from ..logic.hotkeys import GlobalHotkeys
+        self._hotkeys = GlobalHotkeys({
+            int(constants.EXECUTOR.get("confirm_vk", 0x77)):
+                lambda: self.after(0, self._hotkey_confirm),
+            int(constants.EXECUTOR.get("kill_vk", 0x78)):
+                lambda: self.after(0, self._hotkey_kill),
+        })
+        self._hotkeys.start()
+
+    def _stop_hotkeys(self):
+        if self._hotkeys is not None:
+            self._hotkeys.stop()
+            self._hotkeys = None
+
+    def _hotkey_confirm(self):
+        result = self.executor.confirm()
+        self._refresh_executor_ui()
+        self.exec_status_var.set(result)
+
+    def _hotkey_kill(self):
+        self.executor.kill("kill switch (F9)")
+        self._refresh_executor_ui()
+        self.exec_status_var.set("KILLED — disarmed (F9).")
+
+    def _hide_marker(self):
+        if self.ghost_marker is not None and self.ghost_marker.winfo_exists():
+            self.ghost_marker.hide()
+
+    def _render_executor(self, state):
+        """Per-snapshot executor display sync (Tk thread)."""
+        armed = state["armed"]
+        text = "🔴  ARMED — F8 fires" if armed else "⚪  ARM"
+        bg = C["danger"] if armed else C["text_secondary"]
+        if self.arm_btn.cget("text") != text:
+            self.arm_btn.config(text=text, bg=bg, activebackground=bg)
+            self.arm_btn._base_bg = bg
+        if state["mode"] != "off":
+            status = state["status"] or "watching…"
+            session = state["session"]
+            if session["plans"]:
+                status += (f"  ·  {session['plans']} plans, "
+                           f"{session['fired']} fired, "
+                           f"{session['verified']} verified")
+            self.exec_status_var.set(status)
+        marker = state.get("marker")
+        if (marker is not None and self.monitor is not None
+                and self.controller.running):
+            if self.ghost_marker is None or not self.ghost_marker.winfo_exists():
+                from .ghost_overlay import GhostMarker
+                self.ghost_marker = GhostMarker(self)
+            self.ghost_marker.show(self.monitor.x + marker["x"],
+                                   self.monitor.y + marker["y"],
+                                   marker["text"], marker["color"])
+        else:
+            self._hide_marker()
 
     def _build_counters_section(self, parent):
         section = self._section(parent, "Cards Seen (this shoe)")
@@ -552,6 +713,10 @@ class ModernBlackjackGUI(tk.Tk):
     def _toggle_detection(self):
         if self.controller.running:
             self.controller.stop()
+            # No fresh snapshots while stopped — acting on a stale phase
+            # would be a blind click.
+            self.executor.disarm("detection stopped")
+            self._hide_marker()
             self.start_btn.config(text="▶  Start Detection", bg=C["success"],
                                   activebackground=C["success_hover"])
             self.start_btn._base_bg = C["success"]
@@ -684,6 +849,10 @@ class ModernBlackjackGUI(tk.Tk):
             if snapshot is not None and snapshot["seq"] != self._last_seq:
                 self._last_seq = snapshot["seq"]
                 self._render(snapshot)
+            # The executor ticks EVERY poll, not just on new snapshots —
+            # its staleness disarm and verification deadlines must keep
+            # running when the worker stalls and snapshots stop flowing.
+            self._render_executor(self.executor.step(snapshot))
             self._sync_start_button()
         except Exception as e:
             # A render error must never kill the update loop.
@@ -694,6 +863,8 @@ class ModernBlackjackGUI(tk.Tk):
         """Keep the Start/Stop button truthful if the worker dies (model error)."""
         showing_stop = self.start_btn.cget("text").startswith("■")
         if showing_stop and not self.controller.running:
+            self.executor.disarm("detection worker stopped")
+            self._hide_marker()
             self.start_btn.config(text="▶  Start Detection", bg=C["success"],
                                   activebackground=C["success_hover"])
             self.start_btn._base_bg = C["success"]
@@ -1017,6 +1188,8 @@ class ModernBlackjackGUI(tk.Tk):
             self.set_status(f"OCR calibration failed: {e}", error=True)
 
     def _on_close(self):
+        self._stop_hotkeys()
+        self.executor.disarm("app closing")
         self.controller.stop()
         # OCR bankroll syncs persist at round end; a close mid-round must
         # not lose the latest value.

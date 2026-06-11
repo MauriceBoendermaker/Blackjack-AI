@@ -1085,6 +1085,12 @@ class DetectionEngine:
         so a slow disk never hitches the Tk loop)."""
         self._io_pool.submit(self._save_settings_job)
 
+    def submit_io(self, fn, *args):
+        """Run a small disk/DB job on the single io worker — external
+        SQLite writers (the executor's audit trail) must share this one
+        thread to keep the single-writer ordering contract."""
+        return self._io_pool.submit(fn, *args)
+
     def _persist_round_job(self, snap, counter_state, round_number, cutting,
                            paytable_hash):
         # The hash is captured under _lock at round end like every other
@@ -1856,6 +1862,10 @@ class DetectionEngine:
                 self._bet_was_capped = True
             snapshot = {
                 "seq": 0,
+                # Publish time: the executor refuses to fire from a stale
+                # snapshot (a hung worker must not leave a frozen MY_TURN
+                # that passes every guard forever).
+                "ts": time.time(),
                 "seats": seats,
                 "dealer": {"card": dealer_rank, "locked": self.dealer_locked,
                            "extras": dealer_extra_ranks},
@@ -1863,6 +1873,8 @@ class DetectionEngine:
                 "side_bets": side_bet_items,
                 "count": count,
                 "bet": suggestion["text"],
+                "bet_suggested": suggestion["bet"],
+                "bet_sit_out": suggestion["sit_out"],
                 "bet_behind": self._bet_behind_text(suggestion["edge"]),
                 "edge_exact": self._predeal["edge"],
                 "bet_placed": self.bet_placed,
