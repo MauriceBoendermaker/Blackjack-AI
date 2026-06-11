@@ -10,6 +10,7 @@ import time
 
 from ..common import constants
 from .engine import DetectionEngine
+from .phase import BETTING_OPEN, MY_TURN
 
 
 class DetectionController:
@@ -88,6 +89,10 @@ class DetectionController:
                     sleep_s = constants.CYCLE_SLEEP_COMPLETE
                 else:
                     sleep_s = constants.CYCLE_SLEEP_WAITING
+                if self.engine.current_phase in (BETTING_OPEN, MY_TURN):
+                    # Hard deadlines (~12-15 s betting window, ~10-13 s
+                    # decision timer): sample fast while one is running.
+                    sleep_s = min(sleep_s, constants.CYCLE_SLEEP_ACTION)
                 stop_event.wait(sleep_s)
             self.state = "stopped"
         finally:

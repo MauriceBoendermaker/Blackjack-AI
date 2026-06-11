@@ -45,6 +45,11 @@ def snapshot() -> dict:
         "ui": dict(constants.UI),
         "app": {name: getattr(constants, name) for name in _APP_ATTRS},
         "ocr": {key: constants.OCR[key] for key in _OCR_TOGGLES},
+        "phase": {"enabled": constants.PHASE["enabled"]},
+        # The API key persists in plaintext like every other local setting;
+        # ANTHROPIC_API_KEY overrides it without touching the file.
+        "vision": {key: constants.VISION[key]
+                   for key in ("enabled", "api_key", "model", "triage")},
     }
 
 
@@ -95,6 +100,17 @@ def apply(data: dict):
     for key in _OCR_TOGGLES:
         if key in ocr:
             constants.OCR[key] = int(bool(ocr[key]))
+    phase_cfg = data.get("phase", {})
+    if "enabled" in phase_cfg:
+        constants.PHASE["enabled"] = int(bool(phase_cfg["enabled"]))
+    vision = data.get("vision", {})
+    for key in ("enabled", "triage"):
+        if key in vision:
+            constants.VISION[key] = int(bool(vision[key]))
+    if "api_key" in vision:
+        constants.VISION["api_key"] = str(vision["api_key"] or "")
+    if "model" in vision and str(vision["model"] or "").strip():
+        constants.VISION["model"] = str(vision["model"]).strip()
 
 
 # Serializes concurrent writers (the engine io thread and the Tk thread):

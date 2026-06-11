@@ -12,6 +12,7 @@ TITLE = f"Blackjack AI - v{VERSION}"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ASSETS_DIR = PROJECT_ROOT / "assets"
 CARDS_DIR = ASSETS_DIR / "cards"
+CONTROLS_DIR = ASSETS_DIR / "controls"  # captured control templates, per profile
 STRATEGY_CSV_PATH = ASSETS_DIR / "strategy.csv"
 MODELS_DIR = PROJECT_ROOT / "models"
 OUTPUT_DIR = PROJECT_ROOT / "output"
@@ -94,6 +95,10 @@ DEALER_AREA_WIDTH, DEALER_AREA_HEIGHT = 1000, 800
 CYCLE_SLEEP_DEALING = 0.4
 CYCLE_SLEEP_COMPLETE = 1.0
 CYCLE_SLEEP_WAITING = 1.2
+# Time-critical phases (bets open / your turn) sample faster — the betting
+# window is ~12-15 s and the decision timer ~10-13 s, so a 1.2 s cadence
+# would burn a third of the window just noticing it opened.
+CYCLE_SLEEP_ACTION = 0.3
 
 # A gap between worker cycles longer than this means the machine slept or the
 # process was suspended — hosted model sessions are refreshed before reuse,
@@ -177,6 +182,55 @@ OCR = {
     "interval_s": 1.0,       # read cadence; every engine besides EasyOCR is fine at 1 Hz
     "sync_bankroll": 1,      # screen balance is ground truth for the bankroll
     "sync_bet": 1,           # screen bet fills the "bet placed" field
+}
+
+# Game-phase / turn detection (V4 Feature 1, lib/logic/phase.py). The
+# detector reads countdown digits + the "place your bets" banner via the
+# OCR regions and template-matches the captured action buttons every cycle.
+PHASE = {
+    "enabled": 1,
+    # Template match score (cv2.TM_CCOEFF_NORMED) below which a control is
+    # treated as absent. Evolution buttons are crisp renders; 0.70 tolerates
+    # stream compression while rejecting felt/chips at the same spot.
+    "match_threshold": 0.70,
+    # Mean per-channel color distance (0-255) between the matched patch and
+    # the captured template above which the button counts as DISABLED
+    # (greyed). Templates must be captured while the buttons are enabled.
+    # Kept tight: rendered UI under stream compression drifts <10, a
+    # grey-out shifts ~50 — and the safe failure mode is "disabled".
+    "enabled_color_dist": 35.0,
+    # Search padding around a control's calibrated rect (fraction of the
+    # rect size) — tolerates small client re-layouts without a blind match
+    # across the whole frame.
+    "search_pad": 0.35,
+    # Consecutive confirming cycles before MY_TURN / BETTING_OPEN latch.
+    # One frame of a half-rendered button must never flash "YOUR TURN".
+    "confirm_frames": 2,
+    # An OCR'd status/result/timer older than this is stale for phase logic.
+    "ocr_fresh_s": 3.0,
+    # BETTING_OPEN confirmed for this many cycles while the finished round
+    # is still on the table fast-paths the auto round reset (the betting
+    # banner is a stronger "table cleared" signal than N empty frames).
+    "reset_confirm_frames": 2,
+    # MY_TURN with the countdown at/below this many seconds and no action
+    # observed yet raises the missed-decision alarm on the HUD.
+    "alarm_timer_s": 4.0,
+    # Seconds after MY_TURN ends before the observed action is judged
+    # against the advice (a clicked Hit takes a moment to land a card).
+    "discipline_grace_s": 3.0,
+}
+
+# Claude vision assist (optional, hybrid per design decision: the per-frame
+# hot loop stays local; the API is only used for one-shot calibration
+# bootstrap and unknown-state triage). Uses the plain REST API via
+# `requests` — no SDK dependency. Key can also come from ANTHROPIC_API_KEY.
+VISION = {
+    "enabled": 0,
+    "api_key": "",
+    "model": "claude-opus-4-8",
+    "triage": 1,             # label unknown screens (modals, disconnects)
+    "triage_after_s": 15.0,  # UNKNOWN phase persisting this long triggers it
+    "triage_min_gap_s": 60.0,
 }
 
 # Side bets offered by the table and their paytables (X means pays X:1).

@@ -52,7 +52,7 @@ def _res_key(resolution):
 
 
 def _new_profile():
-    return {"saved": None, "regions": {}, "ocr": {}}
+    return {"saved": None, "regions": {}, "ocr": {}, "controls": {}}
 
 
 def _empty():
@@ -72,7 +72,7 @@ def _load():
                 raise ValueError("no profiles")
             for prof in profiles.values():
                 prof.setdefault("saved", None)
-                for kind in ("regions", "ocr"):
+                for kind in ("regions", "ocr", "controls"):
                     # setdefault alone lets an existing null/list through,
                     # which would crash every _get/_set downstream.
                     if not isinstance(prof.get(kind), dict):
@@ -182,9 +182,13 @@ def set_active(name) -> bool:
         return True
 
 
-def _get(kind, resolution):
+def _get(kind, resolution, profile=None):
+    """The active profile's payload for this kind/resolution — or a NAMED
+    profile's when `profile` is given (None for unknown names)."""
     data = _load()
-    return data["profiles"][data["active"]][kind].get(_res_key(resolution))
+    prof = data["profiles"].get(profile) if profile \
+        else data["profiles"][data["active"]]
+    return prof[kind].get(_res_key(resolution)) if prof else None
 
 
 def _set(kind, resolution, payload, profile):
@@ -234,3 +238,21 @@ def set_ocr(resolution, payload, profile=None):
 
 def delete_ocr(resolution):
     _delete("ocr", resolution)
+
+
+# Control-template calibration (V4 Feature 1): per-resolution rects + the
+# template filenames for the action buttons / bet spot, captured with the
+# Capture Controls editor. Payload shape per resolution:
+#   {"hit": {"rect": [l,t,r,b], "template": "hit.png"}, ...}
+# Template images live under assets/controls/<profile-slug>/<WxH>/.
+
+def get_controls(resolution, profile=None):
+    return _get("controls", resolution, profile=profile)
+
+
+def set_controls(resolution, payload, profile=None):
+    _set("controls", resolution, payload, profile)
+
+
+def delete_controls(resolution):
+    _delete("controls", resolution)

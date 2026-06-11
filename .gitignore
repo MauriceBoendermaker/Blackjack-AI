@@ -28,3 +28,5 @@ models/*.engine
 # ...except the app's own assets
 !assets/**/*.png
 !assets/**/*.jpg
+# Captured control templates are per-user calibration, not shipped assets
+assets/controls/

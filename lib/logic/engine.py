@@ -29,6 +29,7 @@ from . import deviations
 from . import ev_engine
 from . import ev_offload
 from . import ocr
+from . import phase
 from . import seat_quality
 from . import settlement
 from . import shoe
@@ -168,6 +169,19 @@ class DetectionEngine:
         self._confirm_count = 0
         self._cc_cycle = 0
 
+        # Game-phase / turn detection (V4 Feature 1). The detector itself is
+        # worker-thread-only; its result dict is committed under self._lock
+        # and published as snapshot["phase"].
+        self.phase_detector = phase.PhaseDetector(log=self.log)
+        self._phase_state = phase.empty_state()
+        self._phase_prev = phase.IDLE
+        self._my_turn_baseline = {}   # seat -> {"cards", "split", "optimal"}
+        self._pending_discipline = []  # judged a grace period after MY_TURN
+        self.discipline = {"checked": 0, "matched": 0}
+        self._unknown_since = None    # monotonic ts the UNKNOWN streak began
+        self._triage_pending = False
+        self._triage_last_ts = 0.0
+
         self._snapshot_lock = threading.Lock()
         self._snapshot = None
         self._seq = 0
@@ -186,6 +200,7 @@ class DetectionEngine:
             sx, _ = scaling_factors(res)
             self._dist_scale = sx
             self._ocr_regions = ocr.load_regions(res)
+        self.phase_detector.configure(res)
         if (self._ocr_regions is None and ocr.OCR_AVAILABLE
                 and constants.OCR.get("enabled")):
             # Region files are keyed by exact capture resolution; without
@@ -262,6 +277,9 @@ class DetectionEngine:
             # threshold, so a static table would defer reads ~10 s.
             # _maybe_ocr self-throttles to OCR["interval_s"].
             self._maybe_ocr(frame)
+            # Phase detection too — a button enabling or a countdown digit
+            # is a small-region change below FRAME_DIFF_THRESHOLD.
+            self._update_phase(frame)
             if self._frame_unchanged(frame):
                 skipped = True
                 if self._empty_frames > 0:
@@ -729,6 +747,10 @@ class DetectionEngine:
         self._dealer_counted = False
         with self._advice_lock:
             self._ev_error_keys.clear()
+        # Pending discipline judgments belong to the round that just ended;
+        # judging them against the next round's cards would be noise.
+        self._pending_discipline = []
+        self._my_turn_baseline = {}
         if self._bet_was_capped:
             self._bet_was_capped = False
             # Only count rounds where cards were actually dealt — otherwise
@@ -1363,6 +1385,224 @@ class DetectionEngine:
             self.log(f"Exact pre-deal edge: {edge:+.3%}")
         self.publish_snapshot()
 
+    # ----------------------------------------------------- phase detection
+
+    @property
+    def current_phase(self) -> str:
+        """The latest detected game phase (for the controller's pacing)."""
+        return self._phase_state.get("phase", phase.IDLE)
+
+    def reload_phase_controls(self):
+        """Re-read the active profile's control templates after a
+        Capture Controls save or a profile switch."""
+        if self.capture.monitor is not None:
+            self.phase_detector.configure(self.capture.resolution)
+
+    def _update_phase(self, frame):
+        """Per-cycle game-phase step (V4 Feature 1). The template matching
+        is cheap C work and runs OUTSIDE self._lock; only the signal
+        gathering and the state commit take it. Runs before the frame-diff
+        skip for the same reason OCR does."""
+        if not constants.PHASE.get("enabled"):
+            # Disabled mid-run: clear the latched state, or the HUD keeps a
+            # stale YOUR TURN banner and the controller stays pinned at the
+            # fast cadence forever.
+            if self._phase_state.get("phase") != phase.IDLE:
+                with self._lock:
+                    self._phase_state = phase.empty_state()
+                    self._phase_prev = phase.IDLE
+                    self._pending_discipline = []
+                    self._my_turn_baseline = {}
+                self.phase_detector.reset()
+            return
+        with self._lock:
+            cards_on_table = sum(len(s.cards) for s in self.seats)
+            if self.dealer_card:
+                cards_on_table += 1 + len(self.dealer_extras)
+            undecided = [s.index for s in self.seats
+                         if s.index in self.my_seats and s.cards
+                         and self._seat_undecided(s)]
+            signals = {
+                "activity": self._activity(),
+                "cards_on_table": cards_on_table,
+                "undecided_mine": undecided,
+                "my_seats": sorted(self.my_seats),
+                "ocr": dict(self._ocr_last),
+            }
+        state = self.phase_detector.update(frame, signals)
+        with self._lock:
+            prev, new = self._phase_prev, state["phase"]
+            # A triage label sticks while the screen stays unidentified.
+            state["triage"] = (self._phase_state.get("triage")
+                               if new == phase.UNKNOWN else None)
+            self._phase_state = state
+            if new != prev:
+                self._phase_prev = new
+                self._on_phase_transition(prev, new, state)
+            self._check_discipline()
+            if (new == phase.BETTING_OPEN and self._activity() == "complete"
+                    and self._empty_frames >= 1
+                    and self._dealer_empty_frames >= 1):
+                # Fast-path settle: the next round's betting banner PLUS at
+                # least one provably clear inference pass (player AND dealer
+                # area empty). The banner alone is not enough — it routinely
+                # appears while the previous round's cards are still being
+                # swept, and resetting then would re-lock and RE-COUNT those
+                # cards into the shoe (a money-correctness bug). With the
+                # one-frame evidence this settles ~4 frames sooner than the
+                # EMPTY_FRAMES_FOR_RESET stretch, never sooner than safe.
+                self.log("Betting window open over a cleared table — "
+                         "settling the finished round now (phase fast-path).")
+                self._empty_frames = 0
+                self._dealer_empty_frames = 0
+                self._reset_round_state()
+        self._maybe_triage(frame, state)
+
+    @staticmethod
+    def _seat_undecided(seat) -> bool:
+        """Does this seat still have a hand a decision could apply to?
+        Split seats are judged PER HAND — the combined card total of both
+        hands is meaningless and wrongly excluded split seats from turn
+        attribution."""
+        if seat.split:
+            return any(
+                hand and cards.hand_value(hand) < 21
+                for hand in ([c["name"] for c in seat.cards
+                              if c.get("hand", 0) == h] for h in (0, 1)))
+        return cards.hand_value([c["name"] for c in seat.cards]) < 21
+
+    def _on_phase_transition(self, prev, new, state):
+        """React to a confirmed phase change. Caller holds self._lock."""
+        if new == phase.MY_TURN:
+            # Re-entering the turn supersedes any judgment queued by a brief
+            # exit flap — judging "you stood" while the buttons are
+            # demonstrably live again would be a false accusation.
+            self._pending_discipline = []
+            # Baseline every owned seat so the observed action (cards grew /
+            # stood pat / split) can be judged against the advice that was
+            # showing when the buttons went live.
+            self._my_turn_baseline = {}
+            snap = self.get_snapshot() or {}
+            seats_snap = {s["index"]: s for s in snap.get("seats", [])}
+            for idx in self.my_seats:
+                seat = self.seats[idx]
+                if not seat.cards:
+                    continue
+                entry = seats_snap.get(idx, {})
+                code = entry.get("optimal_action")
+                if isinstance(code, list):
+                    code = next((c for c in code if c), None)
+                if not code:
+                    book = entry.get("book_action")
+                    if isinstance(book, list):
+                        book = next((b for b in book if b), None)
+                    code = str(book).split("/")[0] if book else None
+                self._my_turn_baseline[idx] = {"cards": len(seat.cards),
+                                               "split": seat.split,
+                                               "optimal": code}
+            seat_txt = (f" (P{state['my_seat'] + 1})"
+                        if state.get("my_seat") is not None else "")
+            self.log(f"YOUR TURN{seat_txt} — action buttons are live.",
+                     level="WARNING")
+        elif prev == phase.MY_TURN:
+            grace = float(constants.PHASE.get("discipline_grace_s", 3.0))
+            for idx, base in self._my_turn_baseline.items():
+                if base["optimal"] in (None, "", "R"):
+                    continue  # nothing judgeable (surrender is unobservable)
+                self._pending_discipline.append(
+                    {"seat": idx, **base, "round": self.round_number,
+                     "deadline": time.monotonic() + grace})
+            self._my_turn_baseline = {}
+        if new == phase.BETTING_OPEN:
+            timer = state.get("timer_s")
+            self.log("Betting window open"
+                     + (f" — {timer}s left" if timer is not None else "")
+                     + ".")
+
+    def _check_discipline(self):
+        """Judge observed actions against the advice once their grace
+        period lapses (live discipline feedback). Caller holds self._lock."""
+        if not self._pending_discipline:
+            return
+        now = time.monotonic()
+        due = [p for p in self._pending_discipline if p["deadline"] <= now]
+        if not due:
+            return
+        self._pending_discipline = [p for p in self._pending_discipline
+                                    if p["deadline"] > now]
+        for p in due:
+            if p.get("round") != self.round_number:
+                continue  # the round rolled mid-grace: stale, never judge
+            seat = self.seats[p["seat"]]
+            if len(seat.cards) < p["cards"]:
+                continue  # the round reset mid-grace: nothing to judge
+            grew = len(seat.cards) > p["cards"]
+            split_now = seat.split and not p["split"]
+            optimal = p["optimal"]
+            if split_now:
+                observed, matched = "split", optimal == "P"
+            elif grew:
+                # A split is detected via the split flag above; a grown hand
+                # against optimal "P" is a deviation, not a match.
+                observed, matched = "hit/doubled", optimal in ("H", "D")
+            else:
+                observed, matched = "stood", optimal == "S"
+            self.discipline["checked"] += 1
+            if matched:
+                self.discipline["matched"] += 1
+            else:
+                name = _ACTION_NAMES.get(optimal, optimal)
+                self.log(f"Discipline: P{p['seat'] + 1} — you {observed}; "
+                         f"optimal was {name}.", level="WARNING")
+
+    def _maybe_triage(self, frame, state):
+        """Label a persistently UNKNOWN screen (modal / disconnect / lobby)
+        via the optional Claude vision assist. Network work goes to the io
+        thread; the hot loop never blocks on it."""
+        if state["phase"] != phase.UNKNOWN:
+            self._unknown_since = None
+            return
+        from . import vision_assist
+        if not vision_assist.available() or not constants.VISION.get("triage"):
+            return
+        now = time.monotonic()
+        if self._unknown_since is None:
+            self._unknown_since = now
+            return
+        if (now - self._unknown_since
+                < float(constants.VISION.get("triage_after_s", 15.0))
+                or self._triage_pending
+                or now - self._triage_last_ts
+                < float(constants.VISION.get("triage_min_gap_s", 60.0))):
+            return
+        self._triage_pending = True
+        # Dedicated thread, NOT the io pool: a slow API round-trip must
+        # never queue the 1 Hz OCR reads (the phase machine's own input)
+        # or the SQLite writes behind it.
+        threading.Thread(target=self._triage_job, args=(frame.copy(),),
+                         daemon=True, name="vision-triage").start()
+
+    def _triage_job(self, frame):
+        from . import vision_assist
+        try:
+            label = vision_assist.triage(frame)
+        except Exception as e:
+            label = None
+            self._log_ev_error(("triage",), f"Vision triage failed: {e!r}")
+        finally:
+            # Timestamp BEFORE clearing the pending flag — the other order
+            # opens a window where the worker sees pending=False with the
+            # old timestamp and double-submits.
+            self._triage_last_ts = time.monotonic()
+            self._triage_pending = False
+        if label:
+            with self._lock:
+                self._phase_state = {**self._phase_state, "triage": label}
+            self.log(f"Screen-state triage: {label}", level="WARNING")
+        self.publish_snapshot()
+
+    # ----------------------------------------------------------------- ocr
+
     def _maybe_ocr(self, frame):
         """Throttled screen-OCR of balance/bet/result crops (advice thread)."""
         if (not ocr.OCR_AVAILABLE or not self._ocr_regions
@@ -1630,6 +1870,8 @@ class DetectionEngine:
                 "bet_capped_rounds": self.bet_capped_rounds,
                 "session_pnl": dict(self.session_pnl),
                 "ocr": dict(self._ocr_last) if self._ocr_regions else None,
+                "phase": {**self._phase_state,
+                          "discipline": dict(self.discipline)},
                 "round": self.round_number,
                 "cutting_card_seen": self.cutting_card_seen,
                 "reshuffle_badge": (self.cutting_card_seen

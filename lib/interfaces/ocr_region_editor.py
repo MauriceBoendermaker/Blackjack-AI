@@ -1,18 +1,21 @@
-"""OCR-region editor (V2 Feature 5): drag three rectangles over a live
-screenshot — balance, current bet, result banner. Saved per resolution to
-output/ocr_regions_{w}x{h}.json; the engine reloads them on save."""
+"""OCR-region editor (V2 Feature 5): drag rectangles over a live
+screenshot — balance, current bet, result banner, and the countdown timer
+(V4 Feature 1: the phase detector reads "PLACE YOUR BETS" and the digits).
+Saved into the active table profile; the engine reloads them on save."""
 
+import threading
 import tkinter as tk
 
 import cv2
 from PIL import Image, ImageTk
 
 from ..common import constants
-from ..logic import ocr
+from ..logic import ocr, vision_assist
 
 C = constants.COLORS
 HANDLE = 5
-COLORS = {"balance": "#4dd2ff", "bet": "#ffd24d", "result": "#ff7eb6"}
+COLORS = {"balance": "#4dd2ff", "bet": "#ffd24d", "result": "#ff7eb6",
+          "timer": "#9dff4d"}
 
 
 class OcrRegionEditor(tk.Toplevel):
@@ -24,6 +27,7 @@ class OcrRegionEditor(tk.Toplevel):
         self.resolution = capture.resolution
 
         frame_bgr = capture.grab_bgr()
+        self._frame_bgr = frame_bgr
         img = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
         max_w = min(1380, self.winfo_screenwidth() - 80)
         max_h = self.winfo_screenheight() - 180
@@ -39,6 +43,7 @@ class OcrRegionEditor(tk.Toplevel):
 
         saved = ocr.load_regions(self.resolution) or {}
         self.rects = {}
+        self._seeded = {}  # untouched default rects are NOT saved
         for i, key in enumerate(ocr.REGION_KEYS):
             if key in saved:
                 l, t, r, b = saved[key]
@@ -47,6 +52,11 @@ class OcrRegionEditor(tk.Toplevel):
                 r, b = l + 260, t + 50
             s = self.scale
             self.rects[key] = [[l * s, t * s], [r * s, b * s]]
+            if key not in saved:
+                # Snapshot the seeded position: a key the user never drags
+                # must not be persisted as live calibration (a garbage rect
+                # would feed arbitrary screen text into the parsers).
+                self._seeded[key] = [[l * s, t * s], [r * s, b * s]]
 
         self._drag = None
         self.canvas.bind("<Button-1>", self._press)
@@ -55,7 +65,8 @@ class OcrRegionEditor(tk.Toplevel):
 
         bar = tk.Frame(self, bg=C["bg_primary"])
         bar.pack(fill=tk.X, padx=10, pady=(0, 10))
-        tk.Label(bar, text="Blue: balance · Yellow: bet · Pink: result banner",
+        tk.Label(bar, text="Blue: balance · Yellow: bet · Pink: result banner"
+                           " · Green: countdown timer",
                  bg=C["bg_primary"], fg=C["text_secondary"],
                  font=constants.FONT_SMALL).pack(side=tk.LEFT)
         for text, cmd, bg in (("Save", self._save, C["success"]),
@@ -65,8 +76,47 @@ class OcrRegionEditor(tk.Toplevel):
                       fg="white" if bg != C["warning"] else C["text_primary"],
                       relief="flat", padx=14, pady=6, font=constants.FONT_BODY,
                       cursor="hand2").pack(side=tk.RIGHT, padx=4)
+        if vision_assist.available():
+            self._suggest_btn = tk.Button(
+                bar, text="✨ Suggest", command=self._suggest, bg=C["accent"],
+                fg="white", relief="flat", padx=14, pady=6,
+                font=constants.FONT_BODY, cursor="hand2")
+            self._suggest_btn.pack(side=tk.RIGHT, padx=(0, 12))
         self._redraw()
         self.grab_set()
+
+    def _suggest(self):
+        """Pre-fill the rects from one Claude vision call (human reviews
+        and saves — approximate boxes are fine here by design)."""
+        self._suggest_btn.config(state="disabled")
+        frame = self._frame_bgr
+
+        def work():
+            try:
+                suggestion = vision_assist.bootstrap(frame)
+                self.after(0, lambda: self._apply_suggestion(suggestion))
+            except Exception as e:
+                self.after(0, lambda e=e: self._suggest_failed(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_suggestion(self, suggestion):
+        if not self.winfo_exists():
+            return
+        self._suggest_btn.config(state="normal")
+        for key, rect in suggestion.get("ocr", {}).items():
+            if key not in self.rects:
+                continue
+            l, t, r, b = rect
+            s = self.scale
+            self.rects[key] = [[l * s, t * s], [r * s, b * s]]
+        self._redraw()
+
+    def _suggest_failed(self, error):
+        if not self.winfo_exists():
+            return
+        self._suggest_btn.config(state="normal")
+        self.title(f"OCR Regions — suggest failed: {error}")
 
     def _redraw(self):
         self.canvas.delete("overlay")
@@ -102,6 +152,8 @@ class OcrRegionEditor(tk.Toplevel):
     def _save(self):
         out = {}
         for key, ((x1, y1), (x2, y2)) in self.rects.items():
+            if key in self._seeded and self.rects[key] == self._seeded[key]:
+                continue  # never-calibrated, never-touched: skip
             out[key] = [int(min(x1, x2) / self.scale), int(min(y1, y2) / self.scale),
                         int(max(x1, x2) / self.scale), int(max(y1, y2) / self.scale)]
         ocr.save_regions(self.resolution, out)

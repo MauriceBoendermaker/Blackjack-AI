@@ -14,6 +14,7 @@ banner against settlement.
 """
 
 import re
+import unicodedata
 
 from . import region_profiles
 
@@ -24,7 +25,7 @@ except Exception:  # pragma: no cover - import availability depends on the OS
     winocr = None
     OCR_AVAILABLE = False
 
-REGION_KEYS = ("balance", "bet", "result")
+REGION_KEYS = ("balance", "bet", "result", "timer")
 
 _AMOUNT_RE = re.compile(r"\d[\d.,]*")
 _RESULT_VOCAB = {
@@ -33,6 +34,43 @@ _RESULT_VOCAB = {
     "push": "push", "tie": "push",
     "blackjack": "blackjack", "bj": "blackjack",
 }
+
+def _normalize(text) -> str:
+    """Accent-stripped lowercase word soup — both the OCR text and the
+    phrase vocabulary go through this, so 'PLAATS UW  INZET!' and localized
+    accents ('más', 'einsätze') match regardless of how winocr renders
+    them."""
+    if not text:
+        return ""
+    ascii_text = unicodedata.normalize("NFKD", str(text)).encode(
+        "ascii", "ignore").decode("ascii")
+    return " ".join(re.findall(r"[a-zA-Z]+", ascii_text.lower()))
+
+
+# Phase-status phrases on the banner (often the same screen area as the
+# result banner). Evolution localizes the client, so the common locales are
+# included; everything is matched through _normalize. Longest-first so a
+# longer phrase can never be shadowed by a shorter one.
+_STATUS_PHRASES = sorted(
+    ([(_normalize(p), s) for p, s in [
+        ("place your bets", "betting"), ("place bets", "betting"),
+        ("bets open", "betting"),
+        ("plaats uw inzet", "betting"), ("plaats je inzet", "betting"),
+        ("platzieren sie ihre einsätze", "betting"),
+        ("placez vos mises", "betting"),
+        ("hagan sus apuestas", "betting"), ("haga sus apuestas", "betting"),
+        ("fate il vostro gioco", "betting"),
+        ("no more bets", "closed"), ("bets closed", "closed"),
+        ("betting closed", "closed"),
+        ("geen inzetten meer", "closed"),
+        ("keine einsätze mehr", "closed"),
+        ("keine weiteren einsätze", "closed"),
+        ("rien ne va plus", "closed"), ("les jeux sont faits", "closed"),
+        ("no más apuestas", "closed"),
+        ("make your decision", "decision"), ("decide", "decision"),
+    ]]),
+    key=lambda item: -len(item[0]))
+_TIMER_RE = re.compile(r"(?:(\d+)\s*:\s*)?(\d{1,3})\s*s?", re.ASCII)
 
 
 # ------------------------------------------------------------- pure parsing
@@ -70,6 +108,33 @@ def snap_result(text) -> str | None:
         if word in _RESULT_VOCAB:
             return _RESULT_VOCAB[word]
     return None
+
+
+def snap_status(text) -> str | None:
+    """Banner text -> 'betting' | 'closed' | 'decision' | None. Normalizes
+    whitespace and accents so 'PLACE  YOUR\\nBETS' and localized banners
+    still match."""
+    joined = _normalize(text)
+    if not joined:
+        return None
+    for phrase, status in _STATUS_PHRASES:
+        if phrase in joined:
+            return status
+    return None
+
+
+def parse_timer(text) -> int | None:
+    """Countdown text -> whole seconds ('9' -> 9, '0:12' -> 12, '8s' -> 8).
+    None when no digits; values above 120 are misreads (no live-table
+    countdown runs minutes)."""
+    if not text:
+        return None
+    m = _TIMER_RE.search(text)
+    if not m:
+        return None
+    minutes = int(m.group(1)) if m.group(1) else 0
+    seconds = minutes * 60 + int(m.group(2))
+    return seconds if 0 <= seconds <= 120 else None
 
 
 # --------------------------------------------------------- region profiles
@@ -131,9 +196,24 @@ def read_regions(frame_bgr, regions: dict) -> dict:
 
 def interpret(texts: dict) -> dict:
     """Raw OCR texts -> {'balance': float|None, 'bet': float|None,
-    'result': str|None}."""
+    'result': str|None, 'status': str|None, 'timer': int|None,
+    'stray_text': bool}.
+
+    `status` (betting open/closed) reads the result-banner area — Evolution
+    shows "PLACE YOUR BETS" where results appear — with the dedicated timer
+    region as a fallback for tables that print it next to the countdown.
+    `stray_text` flags substantial banner-area text that matches NO known
+    vocabulary — the signature of a modal/disconnect dialog covering the
+    table (the phase detector treats it as an UNKNOWN-screen signal)."""
+    status = snap_status(texts.get("result")) or snap_status(texts.get("timer"))
+    result = snap_result(texts.get("result"))
+    words = [w for w in _normalize(texts.get("result")).split() if len(w) >= 3]
     return {
         "balance": parse_amount(texts.get("balance")),
         "bet": parse_amount(texts.get("bet")),
-        "result": snap_result(texts.get("result")),
+        "result": result,
+        "status": status,
+        "timer": parse_timer(texts.get("timer")),
+        "stray_text": bool(len(words) >= 2 and status is None
+                           and result is None),
     }

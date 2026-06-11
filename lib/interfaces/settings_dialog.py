@@ -237,8 +237,25 @@ class SettingsDialog(tk.Toplevel):
         row = self._field(tab, row, "ocr:sync_bankroll",
                           "Sync bankroll from screen", "bool", None,
                           constants.OCR["sync_bankroll"])
-        self._field(tab, row, "ocr:sync_bet", "Sync bet from screen", "bool",
-                    None, constants.OCR["sync_bet"])
+        row = self._field(tab, row, "ocr:sync_bet", "Sync bet from screen",
+                          "bool", None, constants.OCR["sync_bet"])
+
+        row = self._heading(tab, row, "Phase & turn detection")
+        row = self._field(tab, row, "phase:enabled",
+                          "Detect game phase (bets open / your turn)", "bool",
+                          None, constants.PHASE["enabled"])
+
+        row = self._heading(tab, row, "Claude vision assist (optional)")
+        row = self._field(tab, row, "vision:enabled",
+                          "Enable (calibration suggestions + screen triage)",
+                          "bool", None, constants.VISION["enabled"])
+        row = self._field(tab, row, "vision:triage",
+                          "Label unknown screens (modals, disconnects)",
+                          "bool", None, constants.VISION["triage"])
+        row = self._entry(tab, row, "vision:api_key", "Anthropic API key",
+                          constants.VISION["api_key"], secret=True)
+        self._entry(tab, row, "vision:model", "Vision model",
+                    constants.VISION["model"])
 
     # ------------------------------------------------------------ widgets
 
@@ -271,6 +288,19 @@ class SettingsDialog(tk.Toplevel):
                                     padx=(scaling.px(10), 0), pady=scaling.px(2))
         return row + 1
 
+    def _entry(self, parent, row, key, label, current, secret=False):
+        """Free-text field (API key, model id). `secret` masks the input."""
+        var = tk.StringVar(value=str(current or ""))
+        self._vars[key] = ("str", var, None)
+        tk.Label(parent, text=label, font=constants.FONT_BODY,
+                 bg=C["bg_secondary"], fg=C["text_secondary"], anchor="w"
+                 ).grid(row=row, column=0, sticky="w")
+        tk.Entry(parent, textvariable=var, width=28, font=constants.FONT_BODY,
+                 show="•" if secret else "").grid(
+            row=row, column=1, sticky="w", padx=(scaling.px(10), 0),
+            pady=scaling.px(2))
+        return row + 1
+
     def _spin(self, parent, row, key, label, lo, hi, current):
         var = tk.IntVar(value=current)
         self._vars[key] = ("int", var, None)
@@ -286,7 +316,7 @@ class SettingsDialog(tk.Toplevel):
 
     def _save(self):
         data = {"rules": {}, "side_bets": {}, "betting": {}, "ui": {},
-                "app": {}, "ocr": {}}
+                "app": {}, "ocr": {}, "phase": {}, "vision": {}}
         for key, spec in self._vars.items():
             if key.startswith("sidebet:"):
                 data["side_bets"][key.split(":", 1)[1]] = {"enabled": bool(spec.get())}
@@ -303,6 +333,12 @@ class SettingsDialog(tk.Toplevel):
                 data["app"][key.split(":", 1)[1]] = value
             elif key.startswith("ocr:"):
                 data["ocr"][key.split(":", 1)[1]] = int(value)
+            elif key.startswith("phase:"):
+                data["phase"][key.split(":", 1)[1]] = int(value)
+            elif key.startswith("vision:"):
+                name = key.split(":", 1)[1]
+                data["vision"][name] = (value if kind == "str"
+                                        else int(value))
             elif key == "ui:scale":
                 data["ui"]["scale"] = value
             elif key in ("deck_count", "base_bet"):

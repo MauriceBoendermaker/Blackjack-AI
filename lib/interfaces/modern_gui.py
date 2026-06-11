@@ -17,6 +17,7 @@ import screeninfo
 from ..common import constants
 from ..logic.background import DetectionController
 from ..logic.counting import COUNTER_KEYS
+from ..logic.phase import PHASE_LABELS
 from ..logic.region_preview import build_region_preview
 from . import scaling
 from .card_picker import CardPicker
@@ -312,9 +313,17 @@ class ModernBlackjackGUI(tk.Tk):
         self.calibrate_btn.config(state="disabled")
         self.ocr_btn = self._button(
             section, "🔡  OCR Regions", self._calibrate_ocr, C["bg_canvas_soft"],
-            tooltip="Mark the balance / bet / result areas to read from the screen")
+            tooltip="Mark the balance / bet / result / timer areas to read "
+                    "from the screen")
         self.ocr_btn.pack(fill=tk.X, pady=4)
         self.ocr_btn.config(state="disabled")
+        self.controls_btn = self._button(
+            section, "🎛  Capture Controls", self._calibrate_controls,
+            C["bg_canvas_soft"],
+            tooltip="Capture the Hit/Stand/Double/Split buttons and the bet "
+                    "spot as templates — powers phase & turn detection")
+        self.controls_btn.pack(fill=tk.X, pady=4)
+        self.controls_btn.config(state="disabled")
 
     def _build_counters_section(self, parent):
         section = self._section(parent, "Cards Seen (this shoe)")
@@ -338,7 +347,8 @@ class ModernBlackjackGUI(tk.Tk):
     def _build_game_info_section(self, parent):
         section = self._section(parent, "Game Info")
         self.info_vars = {}
-        for key, label in [("round", "Round"), ("running", "Running count"),
+        for key, label in [("round", "Round"), ("phase", "Phase"),
+                           ("running", "Running count"),
                            ("true", "True count"), ("decks", "Decks remaining"),
                            ("seen", "Cards seen"), ("bet", "Bet hint"),
                            ("behind", "Bet behind"), ("pnl", "Session P&L")]:
@@ -511,6 +521,7 @@ class ModernBlackjackGUI(tk.Tk):
         self.regions_btn.config(state="normal")
         self.calibrate_btn.config(state="normal")
         self.ocr_btn.config(state="normal")
+        self.controls_btn.config(state="normal")
         self.set_status(f"Monitor {idx + 1} confirmed ({self.monitor.width}x{self.monitor.height}).")
 
     def _refresh_profiles(self):
@@ -548,6 +559,7 @@ class ModernBlackjackGUI(tk.Tk):
             self.profile_combo.config(state="readonly")
             self.calibrate_btn.config(state="normal")
             self.ocr_btn.config(state="normal")
+            self.controls_btn.config(state="normal")
             self.set_status("Detection stopped.")
             return
         if self.monitor is None:
@@ -564,6 +576,7 @@ class ModernBlackjackGUI(tk.Tk):
         self.profile_combo.config(state="disabled")
         self.calibrate_btn.config(state="disabled")
         self.ocr_btn.config(state="disabled")
+        self.controls_btn.config(state="disabled")
         self.set_status("Detection starting — initializing models...")
 
     def _new_round(self):
@@ -688,6 +701,7 @@ class ModernBlackjackGUI(tk.Tk):
             self.profile_combo.config(state="readonly")
             self.calibrate_btn.config(state="normal")
             self.ocr_btn.config(state="normal")
+            self.controls_btn.config(state="normal")
 
     def _render(self, snap):
         self._sync_money_entries(snap)
@@ -703,6 +717,17 @@ class ModernBlackjackGUI(tk.Tk):
 
         tc = count["true"]
         self.info_vars["round"].set(str(snap["round"]))
+        phase_state = snap.get("phase") or {}
+        phase_text = PHASE_LABELS.get(phase_state.get("phase"),
+                                      phase_state.get("phase") or "—")
+        if phase_state.get("timer_s") is not None:
+            phase_text += f" · {phase_state['timer_s']}s"
+        disc = phase_state.get("discipline") or {}
+        if disc.get("checked"):
+            phase_text += f" · played book {disc['matched']}/{disc['checked']}"
+        if phase_state.get("triage"):
+            phase_text += " ⚠"
+        self.info_vars["phase"].set(phase_text)
         self.info_vars["running"].set(f"{count['running']:+d}")
         self.info_vars["true"].set(f"{tc:+.1f}")
         self.info_vars["decks"].set(f"{count['decks_remaining']:.1f}")
@@ -948,6 +973,27 @@ class ModernBlackjackGUI(tk.Tk):
             RegionEditor(self, self.controller.engine.capture, on_save=reload_regions)
         except Exception as e:
             self.set_status(f"Calibration failed: {e}", error=True)
+
+    def _calibrate_controls(self):
+        if self.monitor is None:
+            return
+        from .control_capture import ControlCaptureEditor
+
+        def reload_controls():
+            # _confirm_monitor reloads EVERY calibration kind (seat/dealer
+            # regions, OCR rects, phase templates) — a "Save as profile"
+            # switches the active profile, and reloading only the templates
+            # would leave the engine running mixed-profile calibration.
+            self._confirm_monitor()
+            self._refresh_profiles()  # control saves restamp the profile date
+            self.set_status("Control templates saved — phase & turn "
+                            "detection now watches the buttons.")
+
+        try:
+            ControlCaptureEditor(self, self.controller.engine.capture,
+                                 on_save=reload_controls)
+        except Exception as e:
+            self.set_status(f"Control capture failed: {e}", error=True)
 
     def _calibrate_ocr(self):
         if self.monitor is None:
