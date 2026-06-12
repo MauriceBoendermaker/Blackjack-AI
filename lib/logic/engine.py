@@ -35,9 +35,12 @@ from . import settlement
 from . import shoe
 from . import sidebet_outcomes
 from . import sidebets
+from . import anchors as anchors_mod
 from .counting import CardCounter, counter_key
 from .models import ModelProvider, ModelError
-from .monitor_utils import ScreenCapture, scaled_player_regions, dealer_area_rect, scaling_factors
+from .monitor_utils import (Polygon, ScreenCapture, dealer_area_rect,
+                            load_custom_regions, scaled_player_regions,
+                            scaling_factors)
 from .session_store import SessionStore
 from .strategy import StrategyAdvisor
 from .training_data import TrainingDataCollector
@@ -182,6 +185,15 @@ class DetectionEngine:
         self._triage_pending = False
         self._triage_last_ts = 0.0
 
+        # Anchor calibration (V3 E3): solved on the worker (a full-frame
+        # template search must never block the Tk thread). State mutated
+        # under self._lock; published as snapshot["anchors"].
+        self._anchor_state = {"status": "none", "fit": None, "drift": False,
+                              "calib_res": None}
+        self._anchor_set = {}
+        self._anchor_pending = False
+        self._anchor_drift_at = 0.0
+
         self._snapshot_lock = threading.Lock()
         self._snapshot = None
         self._seq = 0
@@ -200,6 +212,12 @@ class DetectionEngine:
             sx, _ = scaling_factors(res)
             self._dist_scale = sx
             self._ocr_regions = ocr.load_regions(res)
+            # Anchor remap (V3 E3): solved on the next worker cycle — a
+            # full-frame template search here would hitch the Tk thread.
+            self._anchor_state = {"status": "none", "fit": None,
+                                  "drift": False, "calib_res": None}
+            self._anchor_set = {}
+            self._anchor_pending = bool(constants.ANCHORS.get("enabled"))
         self.phase_detector.configure(res)
         if (self._ocr_regions is None and ocr.OCR_AVAILABLE
                 and constants.OCR.get("enabled")):
@@ -280,6 +298,8 @@ class DetectionEngine:
             # Phase detection too — a button enabling or a countdown digit
             # is a small-region change below FRAME_DIFF_THRESHOLD.
             self._update_phase(frame)
+            # Anchor solve/drift check (V3 E3): self-throttled like OCR.
+            self._maybe_anchors(frame)
             if self._frame_unchanged(frame):
                 skipped = True
                 if self._empty_frames > 0:
@@ -1403,6 +1423,106 @@ class DetectionEngine:
             self.log(f"Exact pre-deal edge: {edge:+.3%}")
         self.publish_snapshot()
 
+    # --------------------------------------------------- anchor calibration
+
+    def request_anchor_resolve(self):
+        """Re-solve the anchor transform on the next worker cycle (the
+        GUI's one-click re-anchor; set_monitor queues the same thing)."""
+        with self._lock:
+            self._anchor_pending = True
+            self._anchor_state["drift"] = False
+        self.publish_snapshot()
+
+    def _maybe_anchors(self, frame):
+        """Worker-side anchor work: a queued solve, else the throttled
+        drift re-check of an active fit."""
+        if not constants.ANCHORS.get("enabled"):
+            return
+        if self._anchor_pending:
+            self._anchor_pending = False
+            self._resolve_anchors(frame)
+            return
+        with self._lock:
+            fit = self._anchor_state["fit"]
+            drifted = self._anchor_state["drift"]
+            anchor_set = self._anchor_set
+        if fit is None or drifted or not anchor_set:
+            return
+        now = time.monotonic()
+        if now < self._anchor_drift_at:
+            return
+        self._anchor_drift_at = now + float(constants.ANCHORS["drift_check_s"])
+        drift = anchors_mod.check_drift(frame, anchor_set, fit)
+        if not drift["ok"]:
+            with self._lock:
+                self._anchor_state["drift"] = True
+            shift = drift["max_shift"]
+            self.log("Anchor drift detected (worst score "
+                     f"{drift['worst_score']:.2f}"
+                     + (f", shift {shift:.0f}px" if shift is not None else "")
+                     + ") — calibration may be misaligned; use Re-anchor.",
+                     level="WARNING")
+            self.publish_snapshot()
+
+    def _resolve_anchors(self, frame):
+        """Solve the calibrated->live transform and remap every calibrated
+        geometry kind. Fail-disabled: no fit keeps the current geometry."""
+        res = self.capture.resolution
+        if res is None:
+            return
+        calib_res = anchors_mod.calibrated_resolution(res)
+        anchor_set = anchors_mod.load_anchors(calib_res) if calib_res else {}
+        if len(anchor_set) < int(constants.ANCHORS["min_anchors"]):
+            with self._lock:
+                self._anchor_state = {"status": "none", "fit": None,
+                                      "drift": False, "calib_res": None}
+                self._anchor_set = {}
+            return
+        fit = anchors_mod.solve(frame, anchor_set, calib_res)
+        if fit is None:
+            with self._lock:
+                self._anchor_state = {
+                    "status": "failed", "fit": None, "drift": False,
+                    "calib_res": f"{calib_res[0]}x{calib_res[1]}"}
+                self._anchor_set = {}
+            self.log("Anchor solve failed (anchors not found on this "
+                     "screen) — keeping the current calibration; geometry "
+                     "may be wrong here.", level="WARNING")
+            self.publish_snapshot()
+            return
+        regions_payload = load_custom_regions(calib_res)
+        ocr_payload = ocr.load_regions(calib_res)
+        controls = phase.load_controls(calib_res)
+        t_regions = anchors_mod.transform_regions(regions_payload, fit)
+        t_ocr = anchors_mod.transform_ocr(ocr_payload, fit)
+        with self._lock:
+            if t_regions:
+                self.regions = [Polygon(p) for p in t_regions["players"]]
+                self._dealer_rect = tuple(t_regions["dealer"])
+                self._dist_scale = (calib_res[0]
+                                    / constants.BASE_RESOLUTION[0]
+                                    ) * fit["scale"]
+            if t_ocr:
+                self._ocr_regions = t_ocr
+            self._anchor_set = anchor_set
+            self._anchor_state = {
+                "status": "active", "fit": fit, "drift": False,
+                "calib_res": f"{calib_res[0]}x{calib_res[1]}"}
+        self._anchor_drift_at = (time.monotonic()
+                                 + float(constants.ANCHORS["drift_check_s"]))
+        if controls:
+            self.phase_detector.set_controls(
+                anchors_mod.transform_controls(controls, fit))
+        mapped = [name for name, ok in (("regions", bool(t_regions)),
+                                        ("ocr", bool(t_ocr)),
+                                        ("controls", bool(controls))) if ok]
+        self.log(f"Anchors solved: scale {fit['scale']:.3f}, offset "
+                 f"({fit['dx']:+.0f}, {fit['dy']:+.0f}), {fit['matched']} "
+                 f"anchor(s), score {fit['score']:.2f} — mapped "
+                 f"{', '.join(mapped) or 'nothing'} from "
+                 f"{calib_res[0]}x{calib_res[1]}.")
+        self.publish_snapshot()
+
     # ----------------------------------------------------- phase detection
 
     @property
@@ -1896,6 +2016,12 @@ class DetectionEngine:
                 "ocr": dict(self._ocr_last) if self._ocr_regions else None,
                 "phase": {**self._phase_state,
                           "discipline": dict(self.discipline)},
+                "anchors": {
+                    "status": self._anchor_state["status"],
+                    "drift": self._anchor_state["drift"],
+                    "calib_res": self._anchor_state["calib_res"],
+                    "scale": (self._anchor_state["fit"] or {}).get("scale"),
+                },
                 "round": self.round_number,
                 "cutting_card_seen": self.cutting_card_seen,
                 "reshuffle_badge": (self.cutting_card_seen

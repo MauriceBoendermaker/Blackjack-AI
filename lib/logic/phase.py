@@ -259,6 +259,17 @@ class PhaseDetector:
                      "resolution — MY_TURN detection off (use Capture "
                      "Controls to calibrate).", level="WARNING")
 
+    def set_controls(self, controls: dict):
+        """Adopt an externally prepared control set (the anchor remap,
+        V3 E3, hands in rects transformed and templates rescaled to the
+        live screen). Atomic dict swap — same contract as configure()."""
+        self._controls = dict(controls)
+        buttons = [k for k in BUTTON_KEYS
+                   if controls.get(k, {}).get("template") is not None]
+        if buttons:
+            self.log(f"Phase detection: {len(buttons)} control template(s) "
+                     f"mapped via anchors ({', '.join(buttons)}).")
+
     @property
     def calibrated(self) -> bool:
         """True when at least Hit AND Stand templates exist — the minimum

@@ -288,6 +288,15 @@ class ConfirmAndGuards(ExecutorBase):
         self.assertFalse(self.ex.armed)
         self.assertIn("balance mismatch", self.ex.disarm_reason)
 
+    def test_anchor_drift_disarms(self):
+        # V3 E3: drifted calibration means every click target is suspect.
+        self._armed()
+        snap = make_snap()
+        snap["anchors"] = {"status": "active", "drift": True}
+        self.ex.step(snap)
+        self.assertFalse(self.ex.armed)
+        self.assertIn("anchor drift", self.ex.disarm_reason)
+
     def test_double_beyond_max_bet_disarms(self):
         constants.EXECUTOR["max_bet_eur"] = 15.0
         self._armed()

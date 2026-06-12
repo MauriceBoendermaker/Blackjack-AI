@@ -457,6 +457,11 @@ class Executor:
         if state.get("phase") == phase.UNKNOWN:
             self._disarm_locked("unidentified screen (modal/overlay?)")
             return
+        if (snap.get("anchors") or {}).get("drift"):
+            # V3 E3: the calibration anchors moved — every click target is
+            # suspect until the user re-anchors.
+            self._disarm_locked("anchor drift — calibration misaligned")
+            return
         pnl = (snap.get("session_pnl") or {}).get("eur", 0.0)
         stop_loss = float(cfg.get("stop_loss_eur") or 0)
         if stop_loss and pnl <= -stop_loss:

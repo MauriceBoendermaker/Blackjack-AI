@@ -342,6 +342,14 @@ class ModernBlackjackGUI(tk.Tk):
                     "spot as templates — powers phase & turn detection")
         self.controls_btn.pack(fill=tk.X, pady=4)
         self.controls_btn.config(state="disabled")
+        self.anchors_btn = self._button(
+            section, "⚓  Capture Anchors", self._calibrate_anchors,
+            C["bg_canvas_soft"],
+            tooltip="Capture 2-3 stable UI elements (logo, chip tray, menu) "
+                    "— maps this calibration to any resolution or window "
+                    "position")
+        self.anchors_btn.pack(fill=tk.X, pady=4)
+        self.anchors_btn.config(state="disabled")
 
     def _build_executor_section(self, parent):
         """Ghost-mode executor controls (V4 Feature 2). Ghost draws where it
@@ -651,9 +659,23 @@ class ModernBlackjackGUI(tk.Tk):
                   bg=C["warning"], fg=C["bg_primary"], relief="flat", bd=0,
                   cursor="hand2", padx=4, font=constants.FONT_BODY_BOLD
                   ).pack(side=tk.LEFT)
+        # Anchor-drift badge (V3 E3): calibration may be misaligned; the
+        # button re-solves the transform on the next worker cycle.
+        self.anchor_badge = tk.Frame(bar, bg=C["danger"])
+        tk.Label(self.anchor_badge, text="⚓ Anchor drift",
+                 font=constants.FONT_SMALL, bg=C["danger"], fg="white",
+                 padx=6).pack(side=tk.LEFT)
+        tk.Button(self.anchor_badge, text="Re-anchor",
+                  command=self._reanchor, bg=C["danger"], fg="white",
+                  relief="flat", bd=0, cursor="hand2", padx=6,
+                  font=constants.FONT_SMALL).pack(side=tk.LEFT)
 
     def _dismiss_reshuffle(self):
         self.controller.engine.dismiss_reshuffle_badge()
+
+    def _reanchor(self):
+        self.controller.engine.request_anchor_resolve()
+        self.set_status("Re-anchoring on the next detection cycle…")
 
     def set_status(self, message, error=False):
         self.status_var.set(message)
@@ -686,6 +708,7 @@ class ModernBlackjackGUI(tk.Tk):
         self.calibrate_btn.config(state="normal")
         self.ocr_btn.config(state="normal")
         self.controls_btn.config(state="normal")
+        self.anchors_btn.config(state="normal")
         self.set_status(f"Monitor {idx + 1} confirmed ({self.monitor.width}x{self.monitor.height}).")
 
     def _refresh_profiles(self):
@@ -728,6 +751,7 @@ class ModernBlackjackGUI(tk.Tk):
             self.calibrate_btn.config(state="normal")
             self.ocr_btn.config(state="normal")
             self.controls_btn.config(state="normal")
+            self.anchors_btn.config(state="normal")
             self.set_status("Detection stopped.")
             return
         if self.monitor is None:
@@ -745,6 +769,7 @@ class ModernBlackjackGUI(tk.Tk):
         self.calibrate_btn.config(state="disabled")
         self.ocr_btn.config(state="disabled")
         self.controls_btn.config(state="disabled")
+        self.anchors_btn.config(state="disabled")
         self.set_status("Detection starting — initializing models...")
 
     def _new_round(self):
@@ -876,6 +901,7 @@ class ModernBlackjackGUI(tk.Tk):
             self.calibrate_btn.config(state="normal")
             self.ocr_btn.config(state="normal")
             self.controls_btn.config(state="normal")
+            self.anchors_btn.config(state="normal")
 
     def _render(self, snap):
         self._sync_money_entries(snap)
@@ -939,6 +965,11 @@ class ModernBlackjackGUI(tk.Tk):
                 var.set(text)
                 lbl.config(fg=C["success"] if ev > 0 else C["text_secondary"])
 
+        if (snap.get("anchors") or {}).get("drift"):
+            if not self.anchor_badge.winfo_ismapped():
+                self.anchor_badge.pack(side=tk.RIGHT, padx=(0, 10))
+        else:
+            self.anchor_badge.pack_forget()
         if snap.get("reshuffle_badge"):
             if not self.reshuffle_badge.winfo_ismapped():
                 self.reshuffle_badge.pack(side=tk.RIGHT, padx=(0, 10))
@@ -1203,6 +1234,22 @@ class ModernBlackjackGUI(tk.Tk):
                                  on_save=reload_controls)
         except Exception as e:
             self.set_status(f"Control capture failed: {e}", error=True)
+
+    def _calibrate_anchors(self):
+        if self.monitor is None:
+            return
+        from .anchor_editor import AnchorEditor
+
+        def reload_anchors():
+            # Same full-reload chain as the other editors: set_monitor
+            # queues an anchor re-solve for the next worker cycle.
+            self._confirm_monitor()
+            self._refresh_profiles()
+            self.set_status("Anchors saved — the transform is solved on the "
+                            "next detection cycle.")
+
+        AnchorEditor(self, self.controller.engine.capture,
+                     on_save=reload_anchors)
 
     def _calibrate_ocr(self):
         if self.monitor is None:

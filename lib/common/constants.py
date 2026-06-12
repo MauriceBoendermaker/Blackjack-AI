@@ -234,6 +234,31 @@ PHASE = {
     "discipline_grace_s": 3.0,
 }
 
+# Anchor-based resolution-independent calibration (V3 E3,
+# lib/logic/anchors.py). 2-3 template crops of stable UI elements per
+# table profile; on startup/demand the engine matches them on the live
+# frame, solves scale+offset, and maps the one calibrated region set to
+# the actual screen. FAIL-DISABLED: an unsolved fit keeps the current
+# geometry and warns — it never guesses a transform that would move
+# real OCR crops or executor clicks.
+ANCHORS = {
+    "enabled": 1,
+    # TM_CCOEFF_NORMED below this = anchor not found on the live frame.
+    "match_threshold": 0.60,
+    # Anchors required for a trusted fit (1 can't separate scale errors
+    # from offset errors; capture at least 2, ideally 3 spread out).
+    "min_anchors": 2,
+    # Worst allowed |matched - fitted| anchor distance: above this the
+    # geometry is not a uniform scale+offset (rotated/cropped stream) and
+    # the fit is refused.
+    "max_residual_px": 12.0,
+    # Drift re-check cadence on the worker (cheap local searches).
+    "drift_check_s": 20.0,
+    # An anchor moving farther than this from its fitted position latches
+    # the drift warning (and disarms the executor).
+    "drift_shift_px": 14.0,
+}
+
 # Ghost-mode executor / one-key assisted execute (V4 Feature 2 —
 # AUTONOMY_PLAN.md stages 1-2; stage 3 full unattended autonomy is
 # deliberately NOT implemented). Mode and limits persist in settings.json;

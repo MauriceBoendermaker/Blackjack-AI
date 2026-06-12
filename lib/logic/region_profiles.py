@@ -52,7 +52,8 @@ def _res_key(resolution):
 
 
 def _new_profile():
-    return {"saved": None, "regions": {}, "ocr": {}, "controls": {}}
+    return {"saved": None, "regions": {}, "ocr": {}, "controls": {},
+            "anchors": {}}
 
 
 def _empty():
@@ -72,7 +73,7 @@ def _load():
                 raise ValueError("no profiles")
             for prof in profiles.values():
                 prof.setdefault("saved", None)
-                for kind in ("regions", "ocr", "controls"):
+                for kind in ("regions", "ocr", "controls", "anchors"):
                     # setdefault alone lets an existing null/list through,
                     # which would crash every _get/_set downstream.
                     if not isinstance(prof.get(kind), dict):
@@ -256,3 +257,32 @@ def set_controls(resolution, payload, profile=None):
 
 def delete_controls(resolution):
     _delete("controls", resolution)
+
+
+# UI anchors (V3 E3): per-resolution template crops of stable casino-UI
+# elements, used to solve a scale+offset transform that maps the one
+# calibrated region set to whatever the screen actually shows. Payload
+# shape mirrors controls: {"anchor_a": {"rect": [...], "template":
+# "anchor-anchor_a.png"}, ...}; PNGs beside the control templates.
+
+def get_anchors(resolution, profile=None):
+    return _get("anchors", resolution, profile=profile)
+
+
+def set_anchors(resolution, payload, profile=None):
+    _set("anchors", resolution, payload, profile)
+
+
+def delete_anchors(resolution):
+    _delete("anchors", resolution)
+
+
+def anchor_resolutions(profile=None) -> list:
+    """Resolution keys ('WxH') holding anchors — for picking the calibrated
+    set to map when the live resolution has none of its own."""
+    data = _load()
+    prof = data["profiles"].get(profile) if profile \
+        else data["profiles"][data["active"]]
+    if not prof:
+        return []
+    return sorted(key for key, payload in prof["anchors"].items() if payload)

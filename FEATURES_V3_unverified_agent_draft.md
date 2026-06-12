@@ -410,7 +410,17 @@ still needed, the documented mypyc tier (2–5×) from V2 F9.
 last round's shoe. Also makes Feature 4's simulator and Feature 3's
 multi-table refresh cadence comfortable. **Effort:** ~1–2 days.
 
-## E3. Anchor-based, resolution-independent calibration
+## E3. ✅ Anchor-based, resolution-independent calibration — COMPLETED
+
+**Status: DONE** — `lib/logic/anchors.py` (multi-scale matchTemplate per
+anchor, least-squares scale+offset fit with residual gate, fail-disabled),
+4th "anchors" kind in the profile store + PNG templates beside the control
+crops, AnchorEditor (⚓ Capture Anchors, control-capture pattern), engine
+solves on the worker at set_monitor / on demand and remaps regions + OCR
+rects + control templates (rescaled — matchTemplate has no scale
+invariance) from the one calibrated resolution, throttled drift detector →
+status-bar badge with one-click Re-anchor, and the executor auto-disarms on
+drift (every click target is suspect).
 
 **Enhances:** v1 F10 (region editor) + V3.2 (named profiles).
 
