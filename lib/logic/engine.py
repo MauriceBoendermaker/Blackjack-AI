@@ -399,8 +399,23 @@ class DetectionEngine:
         # region preview draws. The old dedicated path (a different model
         # on a small dealer crop) routinely missed cards the preview
         # clearly boxed, which made it undiagnosable from the UI.
+        #
+        # Spatial rule: the dealer's cards fan out HORIZONTALLY and routinely
+        # spill past a tightly-drawn rect (calibrated boxes hug the up-card
+        # and pin to the screen edge), so the draws fell outside and were
+        # dropped while the preview still showed them. The dealer's hand sits
+        # in a clean horizontal band ABOVE every seat, so keep the calibrated
+        # VERTICAL band, widen the horizontal search by a generous margin,
+        # and exclude anything inside a seat polygon (a card is never both a
+        # dealer card and a seat card).
+        # self.regions is swapped wholesale (set_monitor / anchor solve), so
+        # this read needs no lock; _seat_for_point is a pure point-in-polygon.
+        pad_x = max(right - left, int(200 * self._dist_scale))
+        lo_x, hi_x = left - pad_x, right + pad_x
         dealer_preds = [p for p in player_preds
-                        if left <= p["cx"] < right and top <= p["cy"] < bottom]
+                        if top <= p["cy"] < bottom
+                        and lo_x <= p["cx"] < hi_x
+                        and self._seat_for_point(p["cx"], p["cy"]) is None]
         # The cutting card only exists in the rank model — poll it on the
         # dealer crop every Nth cycle, but EVERY cycle once a sighting is
         # pending so the confirmation run is not stretched across poll gaps.

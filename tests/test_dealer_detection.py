@@ -85,6 +85,48 @@ class UnifiedDealerSource(unittest.TestCase):
             eng._detect(frame)
         self.assertIsNone(eng.dealer_card)
 
+    def test_draw_fanning_outside_a_tight_rect_still_tracked(self):
+        # The reported failure: a right-edge-pinned dealer rect (like the
+        # user's [1955,0,2560,554]). The up-card locks inside it; a playout
+        # card fans LEFT, outside [left,right] but in the dealer's vertical
+        # band — it must still be counted (the preview shows it; the old
+        # tight-rect filter dropped it).
+        eng, players, _ = engine_with_models()
+        eng._dealer_rect = (1955, 0, 2560, 554)
+        frame = np.zeros((1440, 2560, 3), dtype=np.uint8)
+        players.preds = [player_pred(cx=2100, cy=200)]  # King of Hearts up
+        for _ in range(constants.DEALER_CONFIRM_FRAMES):
+            eng._detect(frame)
+        self.assertEqual(eng.dealer_card, "King of Hearts")
+        # Draw fans left to x=1700, well outside [1955, 2560].
+        players.preds = [player_pred(cx=2100, cy=200),
+                         {"class": "d7", "confidence": 0.9,
+                          "cx": 1700.0, "cy": 210.0}]
+        for _ in range(constants.EXTRA_CARD_CONFIRM_CYCLES):
+            eng._detect(frame)
+        self.assertEqual([c["rank"] for c in eng.dealer_extras],
+                         ["7 of Clubs"])
+
+    def test_seat_card_in_the_dealer_band_is_not_a_dealer_card(self):
+        # A card inside a seat polygon is never routed to the dealer, even
+        # if it falls within the (widened) dealer horizontal/vertical band.
+        from lib.logic.monitor_utils import Polygon
+        eng, players, _ = engine_with_models()
+        eng._dealer_rect = (1955, 0, 2560, 554)
+        eng.regions = [Polygon([[1600, 100], [1800, 100],
+                                [1800, 300], [1600, 300]])]  # seat in the band
+        frame = np.zeros((1440, 2560, 3), dtype=np.uint8)
+        players.preds = [player_pred(cx=2100, cy=200)]  # up-card
+        for _ in range(constants.DEALER_CONFIRM_FRAMES):
+            eng._detect(frame)
+        # A card landing inside that seat polygon must not become a draw.
+        players.preds = [player_pred(cx=2100, cy=200),
+                         {"class": "d7", "confidence": 0.9,
+                          "cx": 1700.0, "cy": 200.0}]  # inside the seat poly
+        for _ in range(constants.EXTRA_CARD_CONFIRM_CYCLES + 1):
+            eng._detect(frame)
+        self.assertEqual(eng.dealer_extras, [])
+
     def test_cutting_card_coords_shift_to_frame_space(self):
         eng, players, rank = engine_with_models(
             rank_preds=[{"class": CUTTING_CARD_CLASS, "confidence": 0.9,
