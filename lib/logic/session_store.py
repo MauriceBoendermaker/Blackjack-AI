@@ -76,7 +76,14 @@ class SessionStore:
             existing = {row[1] for row in con.execute("PRAGMA table_info(rounds)")}
             for col, decl in (("settlement", "TEXT"), ("pnl_units", "REAL"),
                               ("pnl_eur", "REAL"), ("bet_eur", "REAL"),
-                              ("paytable_hash", "TEXT")):
+                              ("paytable_hash", "TEXT"),
+                              # Ramp-vs-placed comparison inputs (V3 F6).
+                              # Snapshot values at round END — like the count
+                              # columns they describe the NEXT round's
+                              # pre-deal call; row N pairs with row N+1.
+                              ("bet_suggested", "REAL"),
+                              ("bet_sit_out", "INTEGER"),
+                              ("edge_exact", "REAL")):
                 if col not in existing:
                     con.execute(f"ALTER TABLE rounds ADD COLUMN {col} {decl}")
 
@@ -101,8 +108,9 @@ class SessionStore:
                 "INSERT INTO rounds (ts, session_id, round_number, running_count,"
                 " true_count, decks_remaining, cards_seen, dealer_card,"
                 " dealer_extras, seats, insurance, side_bets,"
-                " settlement, pnl_units, pnl_eur, bet_eur, paytable_hash)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " settlement, pnl_units, pnl_eur, bet_eur, paytable_hash,"
+                " bet_suggested, bet_sit_out, edge_exact)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (time.time(), self.session_id, snapshot["round"],
                  count["running"], count["true"], count["decks_remaining"],
                  count["cards_seen"], snapshot["dealer"]["card"],
@@ -122,7 +130,11 @@ class SessionStore:
                  (settle.get("my_eur", 0) or 0)
                  + (settle.get("my_side_eur", 0) or 0)
                  if settle and "my_eur" in settle else None,
-                 snapshot.get("bet_placed"), paytable_hash))
+                 snapshot.get("bet_placed"), paytable_hash,
+                 snapshot.get("bet_suggested"),
+                 (None if snapshot.get("bet_suggested") is None
+                  else int(bool(snapshot.get("bet_sit_out")))),
+                 snapshot.get("edge_exact")))
 
     # ------------------------------------------------------- executor audit
 

@@ -195,7 +195,15 @@ window.
 
 **Effort:** ~3–4 days standalone; ~2 on top of Feature 4.
 
-## 6. Leak finder & coaching report
+## 6. ✅ Leak finder & coaching report — COMPLETED
+
+**Status: DONE** — `lib/logic/leaks.py` (draw-replay divergence detection on
+★ seats incl. index plays, exact-EV costing via ev_offload, bet-discipline
+and −EV side-bet mining with the one-row count lag handled; insurance is
+honestly excluded — the user action is recorded nowhere), persisted
+`bet_suggested`/`bet_sit_out`/`edge_exact` columns going forward, Leak
+Finder window (🩺 nav), "Drill my leaks" feeding the trainer's replay drill
+with a severity-weighted deck, self-contained HTML report export.
 
 **What:** Mine `session.db` into a ranked list of what your mistakes actually
 cost, in units per 100 rounds, by class:

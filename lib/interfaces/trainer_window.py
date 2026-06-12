@@ -64,6 +64,16 @@ class TrainerWindow(tk.Toplevel):
             frame.pack_forget()
         self.frames[key].pack(fill=tk.BOTH, expand=True)
 
+    def load_replay_deck(self, items, label=None):
+        """Replace the replay drill's deck (V3 F6 'Drill my leaks'): items
+        are replay-shaped dicts, worst-first — consumed by pop(), so the
+        list is reversed to keep that order. Switches to the replay tab."""
+        self._rp_items = list(reversed(items))
+        self._rp_deck_label = label or "leak drill"
+        self._rp_next()
+        self._show("replay")
+        self.lift()
+
     def _on_destroy(self, event):
         if event.widget is self:
             self._ev_pool.shutdown(wait=False)
@@ -245,6 +255,7 @@ class TrainerWindow(tk.Toplevel):
         self._rp_items = trainer.replay_items(self.store)
         random.shuffle(self._rp_items)
         self._rp_item = None
+        self._rp_deck_label = None
         self._rp_next()
 
     def _rp_next(self):
@@ -252,8 +263,13 @@ class TrainerWindow(tk.Toplevel):
             return
         if not self._rp_items:
             self._rp_item = None
-            self.rp_question.config(text="No more recorded rounds — play a "
-                                         "session first, then come back.")
+            if self._rp_deck_label:
+                self.rp_question.config(
+                    text=f"End of the {self._rp_deck_label} — refresh the "
+                         "Leak Finder for a new deck.")
+            else:
+                self.rp_question.config(text="No more recorded rounds — play "
+                                             "a session first, then come back.")
             return
         self._rp_item = self._rp_items.pop()
         item = self._rp_item

@@ -140,6 +140,8 @@ class ModernBlackjackGUI(tk.Tk):
             ("🗒  Logs", self._open_logs, "Open the live log window"),
             ("📊  Stats", self._open_stats,
              "Round history, count distribution, CSV export"),
+            ("🩺  Leaks", self._open_leaks,
+             "What your mistakes cost — ranked, EV-priced, drillable"),
             ("🛡  Bankroll", self._open_bankroll,
              "Risk of ruin, Kelly risk table, Monte Carlo simulation"),
             ("🎓  Trainer", self._open_trainer,
@@ -1071,13 +1073,29 @@ class ModernBlackjackGUI(tk.Tk):
         self.hud = None
         self.hud_nav_btn.config(fg=C["text_primary"])
 
-    def _open_trainer(self):
+    def _open_trainer(self, deck=None):
         existing = getattr(self, "trainer_window", None)
         if existing is not None and existing.winfo_exists():
             existing.lift()
+        else:
+            from .trainer_window import TrainerWindow
+            self.trainer_window = TrainerWindow(self,
+                                                self.controller.engine.store)
+        if deck:
+            self.trainer_window.load_replay_deck(deck, label="leak drill")
+
+    def _open_leaks(self):
+        store = self.controller.engine.store
+        if store is None:
+            self.set_status("Session store unavailable.", error=True)
             return
-        from .trainer_window import TrainerWindow
-        self.trainer_window = TrainerWindow(self, self.controller.engine.store)
+        existing = getattr(self, "leaks_window", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            return
+        from .leaks_window import LeaksWindow
+        self.leaks_window = LeaksWindow(
+            self, store, open_trainer=lambda deck: self._open_trainer(deck))
 
     def _maybe_restore_shoe(self):
         """Offer to restore a recent mid-shoe count after a restart."""
