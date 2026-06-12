@@ -184,6 +184,108 @@ class PlayoutFan(unittest.TestCase):
                          ["7", "9", "4"])
 
 
+class DealerDrawingState(unittest.TestCase):
+    """_dealer_drawing gates both the fast pacing and the frame-skip bypass."""
+
+    def setUp(self):
+        self.eng = DetectionEngine(log=lambda *a, **k: None)
+        self.eng.store = None
+        self.eng.replace_card(0, 0, "10 of Hearts")
+        self.eng.replace_card(0, 1, "9 of Spades")
+        self.eng.replace_card(1, 0, "9 of Clubs")
+        self.eng.replace_card(1, 1, "7 of Diamonds")
+
+    def test_true_while_hand_not_final(self):
+        self.eng.replace_dealer("6")  # total 6, must draw
+        self.assertTrue(self.eng._dealer_drawing())
+
+    def test_false_when_no_dealer_locked(self):
+        self.assertFalse(self.eng._dealer_drawing())  # no up-card yet
+
+    def test_false_once_hand_is_final(self):
+        self.eng.replace_dealer("10")
+        self.eng.add_dealer_extra("7 of Clubs")  # 17 — dealer stands
+        self.assertFalse(self.eng._dealer_drawing())
+
+    def test_false_on_all_bust(self):
+        eng = DetectionEngine(log=lambda *a, **k: None)
+        eng.store = None
+        eng.replace_card(0, 0, "10 of Hearts")
+        eng.replace_card(0, 1, "6 of Spades")
+        eng.replace_card(0, 2, "King of Clubs")  # 26, bust
+        eng.replace_dealer("6")
+        self.assertFalse(eng._dealer_drawing())  # dealer never plays out
+
+
+class PlayoutBypassesFrameSkip(unittest.TestCase):
+    """The core fix: during the dealer's playout, a card that lands and then
+    sits static must still confirm — the frame-skip is bypassed so the
+    confirmation sightings accumulate."""
+
+    def setUp(self):
+        self._phase = constants.PHASE["enabled"]
+        constants.PHASE["enabled"] = 0
+        self.eng = DetectionEngine(log=lambda *a, **k: None)
+        self.eng.store = None
+        self.eng.regions = []  # seats come from replace_card, not the model
+        self.eng._dealer_rect = (400, 100, 600, 300)
+        for seat, idx, name in ((0, 0, "10 of Hearts"), (0, 1, "9 of Spades"),
+                                (1, 0, "9 of Clubs"), (1, 1, "7 of Diamonds")):
+            self.eng.replace_card(seat, idx, name)
+        self.eng.replace_dealer("6")  # total 6 — the dealer must draw
+        self.frame = np.full((400, 700, 3), 40, dtype=np.uint8)
+        self.eng.capture = types.SimpleNamespace(
+            grab_bgr=lambda: self.frame, resolution=(700, 400), monitor=None,
+            close_local=lambda: None)
+
+    def tearDown(self):
+        constants.PHASE["enabled"] = self._phase
+
+    def _set_model(self, preds):
+        players = _FakeModel(preds)
+        rank = _FakeModel([])
+        self.eng.provider = types.SimpleNamespace(
+            players_model=lambda: players, dealer_model=lambda: rank,
+            backend_name="fake")
+        return players
+
+    def test_static_playout_card_still_confirms(self):
+        # The dealer's hole/draw card is detected in the dealer area on a
+        # frame that never changes after it lands.
+        self._set_model([{"class": "d7", "confidence": 0.9,
+                          "cx": 500.0, "cy": 200.0}])
+        for _ in range(constants.EXTRA_CARD_CONFIRM_CYCLES + 1):
+            self.eng.run_cycle()
+        self.assertEqual([c["rank"] for c in self.eng.dealer_extras],
+                         ["7 of Clubs"])
+        # Run-cycle reports the fast 'dealing' cadence during playout.
+        self.assertEqual(self.eng.run_cycle(), "dealing")
+
+    def test_idle_static_frame_still_skips(self):
+        # Control: with nothing happening, the skip optimization holds.
+        eng = DetectionEngine(log=lambda *a, **k: None)
+        eng.store = None
+        eng.regions = []
+        eng._dealer_rect = (0, 0, 200, 100)
+        old = constants.PHASE["enabled"]
+        constants.PHASE["enabled"] = 0
+        players = _FakeModel([])
+        eng.provider = types.SimpleNamespace(
+            players_model=lambda: players, dealer_model=lambda: _FakeModel([]),
+            backend_name="fake")
+        frame = np.full((400, 700, 3), 40, dtype=np.uint8)
+        eng.capture = types.SimpleNamespace(
+            grab_bgr=lambda: frame, resolution=(700, 400),
+            close_local=lambda: None, monitor=None)
+        try:
+            eng.run_cycle()  # first: prev is None -> detects
+            eng.run_cycle()  # static, not drawing -> skipped
+            eng.run_cycle()
+            self.assertEqual(players.calls, 1)
+        finally:
+            constants.PHASE["enabled"] = old
+
+
 class DealerAreaFrameDiff(unittest.TestCase):
     """A card flip changes only the dealer area; the whole-frame diff is
     blind to it and must not skip the detect cycle."""

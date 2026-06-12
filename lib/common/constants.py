@@ -91,8 +91,11 @@ DEALER_AREA_WIDTH, DEALER_AREA_HEIGHT = 1000, 800
 # ---------------------------------------------------------------------------
 # Detection engine tuning
 # ---------------------------------------------------------------------------
-# Producer loop pacing (seconds) by activity state.
-CYCLE_SLEEP_DEALING = 0.4
+# Producer loop pacing (seconds) by activity state. "dealing" also covers the
+# dealer's end-of-round playout (engine._dealer_drawing), where draws land
+# ~1 s apart and each needs EXTRA_CARD_CONFIRM_CYCLES sightings — kept fast
+# so a quick playout doesn't outrun the confirmation.
+CYCLE_SLEEP_DEALING = 0.3
 CYCLE_SLEEP_COMPLETE = 1.0
 CYCLE_SLEEP_WAITING = 1.2
 # Time-critical phases (bets open / your turn) sample faster — the betting

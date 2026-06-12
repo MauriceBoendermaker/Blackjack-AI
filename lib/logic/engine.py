@@ -302,7 +302,14 @@ class DetectionEngine:
             self._update_phase(frame)
             # Anchor solve/drift check (V3 E3): self-throttled like OCR.
             self._maybe_anchors(frame)
-            if self._frame_unchanged(frame):
+            # Always run the diff (keeps the thumbnail/skip-counter state
+            # current); the dealer-playout phase overrides its decision so
+            # each draw still accumulates its confirmation sightings even
+            # while the dealer's hand sits static between cards.
+            unchanged = self._frame_unchanged(frame)
+            with self._lock:
+                force_detect = self._dealer_drawing()
+            if unchanged and not force_detect:
                 skipped = True
                 if self._empty_frames > 0:
                     # Unchanged since an empty frame == still empty. The dealer
@@ -314,6 +321,10 @@ class DetectionEngine:
                             self._dealer_empty_frames += 1
                         self._maybe_auto_new_round([])
             else:
+                if unchanged:
+                    # Forced a detect on a static frame — don't let the
+                    # skip counter run away toward MAX_SKIPPED_CYCLES.
+                    self._skipped_cycles = 0
                 self._detect(frame)
         except ModelError as e:
             self.last_error = str(e)
@@ -324,23 +335,12 @@ class DetectionEngine:
 
         with self._lock:
             activity = self._activity()
-            if (activity == "complete" and self.dealer_locked
-                    and self._empty_frames == 0):
-                extras = [c["rank"] for c in self.dealer_extras]
-                all_bust = all(
-                    cards.hand_value([c["name"] for c in s.cards]) > 21
-                    for s in self.seats if s.cards)
-                if (not settlement.dealer_final(self.dealer_card, extras)[2]
-                        and not all_bust):
-                    # The dealer is still drawing: sample at the fast
-                    # "dealing" cadence — playout draws land seconds apart
-                    # and the slow "complete" pace missed cards. All-bust
-                    # rounds skip this (the dealer doesn't draw then), and
-                    # a clearing table (_empty_frames) drops back to the
-                    # slow pace even if a missed draw left the hand
-                    # incomplete. (Only the pacing/status string changes;
-                    # _maybe_auto_new_round keeps using _activity().)
-                    activity = "dealing"
+            # The dealer is still drawing: sample at the fast "dealing"
+            # cadence — playout draws land ~1 s apart and the slow
+            # "complete" pace missed cards. (Only the pacing/status string
+            # changes; _maybe_auto_new_round keeps using _activity().)
+            if activity == "complete" and self._dealer_drawing():
+                activity = "dealing"
         self._last_activity = activity
         self._metrics["cycle_ms"] = (time.perf_counter() - t0) * 1000.0
         self._metrics["skipped"] = skipped
@@ -748,6 +748,29 @@ class DetectionEngine:
         if self.dealer_locked or self.dealer_card:
             return "complete"
         return "dealing"
+
+    def _dealer_drawing(self) -> bool:
+        """The dealer is in its end-of-round playout: up-card locked, every
+        seat dealt, the hand not yet final (from the CONFIRMED extras), and
+        not an all-bust round where the dealer never draws.
+
+        Drives two things: the fast 'dealing' pacing AND a frame-skip
+        bypass — the playout cards each need EXTRA_CARD_CONFIRM_CYCLES
+        sightings, but between draws the dealer's hand sits still, so the
+        whole-frame/dealer-area diff would skip detection and a card never
+        accumulates its second confirmation. Finality is read from the
+        confirmed extras, so a still-pending final card keeps detection
+        running until it confirms (then the hand reads final and it stops).
+        Caller holds self._lock."""
+        if not (self.dealer_locked and self._empty_frames == 0):
+            return False
+        if self._activity() != "complete":
+            return False
+        if all(cards.hand_value([c["name"] for c in s.cards]) > 21
+               for s in self.seats if s.cards):
+            return False  # all players bust — the dealer doesn't play out
+        extras = [c["rank"] for c in self.dealer_extras]
+        return not settlement.dealer_final(self.dealer_card, extras)[2]
 
     def _maybe_auto_new_round(self, player_preds):
         """When a completed round's table is cleared, start the next round.
