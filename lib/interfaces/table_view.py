@@ -54,12 +54,14 @@ def seat_positions(w, h, n, card_w, card_h):
 
 class TableView:
     def __init__(self, parent, on_card_click, on_dealer_click, on_split_click=None,
-                 on_seat_name_click=None, on_dealer_extra_click=None):
+                 on_seat_name_click=None, on_dealer_extra_click=None,
+                 on_advice_click=None):
         self.on_card_click = on_card_click
         self.on_dealer_click = on_dealer_click
         self.on_split_click = on_split_click or (lambda *a: None)
         self.on_seat_name_click = on_seat_name_click or (lambda *a: None)
         self.on_dealer_extra_click = on_dealer_extra_click or (lambda *a: None)
+        self.on_advice_click = on_advice_click  # V3 F8: "why this play?"
 
         self.canvas = tk.Canvas(parent, bg=C["bg_canvas"], highlightthickness=0)
         self._image_cache = {}
@@ -119,6 +121,12 @@ class TableView:
             })
             self.seats[i]["name"].bind(
                 "<Button-1>", lambda e, s=i: self.on_seat_name_click(s))
+            if self.on_advice_click is not None:
+                # Clicking any advice line opens the EV inspector (V3 F8).
+                for key in ("advice", "optimal", "index"):
+                    self.seats[i][key].config(cursor="hand2")
+                    self.seats[i][key].bind(
+                        "<Button-1>", lambda e, s=i: self.on_advice_click(s))
 
     # ----------------------------------------------------------------- images
 

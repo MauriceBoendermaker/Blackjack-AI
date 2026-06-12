@@ -496,6 +496,218 @@ def predeal_ev(comp: tuple, rules: Rules) -> float:
     return total_ev
 
 
+# ------------------------------------------------- explainability (V3 F8)
+
+class _OutcomeEval:
+    """Per-action P(win / push / lose) under the same EV-optimal policy the
+    advice line recommends — the probabilities behind the EV number.
+
+    Reuses the _Evaluator for every DECISION (so the policy is exactly the
+    advised one, Bayes-corrected draws included) and propagates outcome
+    triples through the same tree. Doubles inside the post-draw best play
+    are folded into hit/stand for the outcome view (they change stake, not
+    the outcome class); the split view reports the NET of the two
+    approximately-independent hands."""
+
+    def __init__(self, ev: _Evaluator):
+        self.ev = ev
+        self._memo = {}
+
+    def stand(self, total: int, comp: tuple) -> tuple:
+        dist = _dealer_dist(comp, self.ev.up, self.ev.excl, self.ev.rules.s17)
+        w, p, l = dist[_OUT_BUST], 0.0, 0.0
+        for d in range(17, 22):
+            q = dist[d - 17]
+            if total > d:
+                w += q
+            elif total < d:
+                l += q
+            else:
+                p += q
+        return (w, p, l)
+
+    def best(self, total: int, soft: bool, comp: tuple) -> tuple:
+        key = (total, soft, comp)
+        cached = self._memo.get(key)
+        if cached is not None:
+            return cached
+        if self.ev.ev_stand(total, comp) >= self.ev.ev_hit(total, soft, comp):
+            out = self.stand(total, comp)
+        else:
+            out = self.hit(total, soft, comp)
+        self._memo[key] = out
+        return out
+
+    def hit(self, total: int, soft: bool, comp: tuple) -> tuple:
+        w = p = l = 0.0
+        for i, q in self.ev.draw_probs(comp):
+            t2, s2 = _hand_add(total, soft, i)
+            if t2 > 21:
+                l += q
+            else:
+                sw, sp, sl = self.best(t2, s2, _minus(comp, i))
+                w += q * sw
+                p += q * sp
+                l += q * sl
+        return (w, p, l)
+
+    def double(self, total: int, soft: bool, comp: tuple) -> tuple:
+        w = p = l = 0.0
+        for i, q in self.ev.draw_probs(comp):
+            t2, _ = _hand_add(total, soft, i)
+            if t2 > 21:
+                l += q
+            else:
+                sw, sp, sl = self.stand(t2, _minus(comp, i))
+                w += q * sw
+                p += q * sp
+                l += q * sl
+        return (w, p, l)
+
+    def split_net(self, pair_idx: int, comp: tuple) -> tuple:
+        start = (11, True) if pair_idx == ACE else (pair_idx + 1, False)
+        one_card = pair_idx == ACE and not self.ev.rules.hit_split_aces
+        w = p = l = 0.0
+        for i, q in self.ev.draw_probs(comp):
+            c2 = _minus(comp, i)
+            t2, s2 = _hand_add(start[0], start[1], i)
+            sw, sp, sl = (self.stand(t2, c2) if one_card
+                          else self.best(t2, s2, c2))
+            w += q * sw
+            p += q * sp
+            l += q * sl
+        # Net over the two (approx. independent, identically distributed)
+        # hands: win = more wins than losses, push = balanced.
+        return (w * w + 2 * w * p, p * p + 2 * w * l, l * l + 2 * l * p)
+
+
+def _mix_bj_outcome(triple: tuple, p_bj: float) -> tuple:
+    """ENHC: the dealer-blackjack branch turns every outcome into a loss."""
+    w, p, l = triple
+    return ((1 - p_bj) * w, (1 - p_bj) * p, (1 - p_bj) * l + p_bj)
+
+
+def action_outcomes(hand: tuple, up_idx: int, comp: tuple,
+                    rules: Rules = DEFAULT_RULES,
+                    post_split: bool = False) -> dict:
+    """{code: (p_win, p_push, p_lose)} for the available actions, matching
+    evaluate()'s conditioning: peek games are conditional on no dealer
+    blackjack; ENHC mixes the blackjack branch in (a loss for every
+    action). Surrender 'loses' its half bet by definition."""
+    total, soft = hand_state(hand)
+    ev = _Evaluator(up_idx, rules)
+    oc = _OutcomeEval(ev)
+    out = {"S": oc.stand(total, comp), "H": oc.hit(total, soft, comp)}
+    if len(hand) == 2:
+        if ev._can_double(total, soft) and (not post_split or rules.das):
+            out["D"] = oc.double(total, soft, comp)
+        if hand[0] == hand[1] and not post_split:
+            out["P"] = oc.split_net(hand[0], comp)
+        if rules.surrender and not post_split:
+            out["R"] = (0.0, 0.0, 1.0)
+    if ev.excl is not None and not rules.peek:
+        n = sum(comp)
+        p_bj = comp[ev.excl] / n if n else 0.0
+        if p_bj:
+            out = {code: _mix_bj_outcome(t, p_bj) for code, t in out.items()}
+    return out
+
+
+def dealer_distribution(comp: tuple, up_idx: int,
+                        rules: Rules = DEFAULT_RULES) -> dict:
+    """Display-ready dealer final-total distribution from the up-card:
+    {"17".."21", "bj", "bust"}. The 21 slot is multi-card 21s only; "bj"
+    is the natural (pre-peek probability — shown for peek games too, since
+    that's what the player faces when the up-card lands)."""
+    excl = TEN if up_idx == ACE else (ACE if up_idx == TEN else None)
+    n = sum(comp)
+    p_bj = comp[excl] / n if excl is not None and n else 0.0
+    cond = _dealer_dist(comp, up_idx, excl, rules.s17)
+    out = {str(total): cond[total - 17] * (1.0 - p_bj)
+           for total in range(17, 22)}
+    out["bj"] = p_bj
+    out["bust"] = cond[_OUT_BUST] * (1.0 - p_bj)
+    return out
+
+
+#: Rank labels for the composition-driver panel, by composition index.
+RANK_LABELS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10/J/Q/K"]
+
+
+def composition_drivers(comp: tuple, deck_count: int) -> list:
+    """Per-rank live density vs the fresh-shoe baseline — the ranks whose
+    depletion/excess moved the call. [{label, live, baseline, delta}]."""
+    n = sum(comp)
+    base = full_shoe(deck_count)
+    bn = sum(base)
+    out = []
+    for i in range(10):
+        live = comp[i] / n if n else 0.0
+        baseline = base[i] / bn
+        out.append({"label": RANK_LABELS[i], "live": live,
+                    "baseline": baseline, "delta": live - baseline})
+    return out
+
+
+def inspect_hand(player_cards, dealer_rank, comp: tuple,
+                 deck_count: int | None = None, rules: Rules | None = None,
+                 post_split: bool = False):
+    """Everything the 'why this play?' inspector shows, in one picklable
+    job (V3 F8): the full EV dict, per-action outcome probabilities, the
+    dealer final-total distribution, composition drivers, and the
+    fresh-shoe verdict for the flip indicator. `comp` is the unseen
+    composition EXCLUDING hand and up-card (sandbox callers edit it
+    directly). None when no decision applies — same rules as advise()."""
+    if deck_count is None:
+        deck_count = constants.DECK_COUNT
+    if rules is None:
+        rules = current_rules()
+    hand = [c for c in player_cards if c and c != "-"]
+    if len(hand) < 2 or not dealer_rank:
+        return None
+    indices = tuple(sorted(card_index(c) for c in hand))
+    total, _ = hand_state(indices)
+    if total >= 21:
+        return None
+    if any(c < 0 for c in comp) or sum(comp) <= 1:
+        return None
+    up = card_index(dealer_rank)
+    result = evaluate(indices, up, comp, rules, post_split)
+    # Fresh-shoe counterfactual: same hand, baseline composition — when the
+    # verdicts differ, the composition (not the totals) made the call.
+    baseline = list(full_shoe(deck_count))
+    for idx in indices + (up,):
+        baseline[idx] -= 1
+    baseline_result = (evaluate(indices, up, tuple(baseline), rules,
+                                post_split)
+                       if all(c >= 0 for c in baseline) else None)
+    return {
+        "evs": result["evs"],
+        "best": result["best"],
+        "p_dealer_bj": result["p_dealer_bj"],
+        "outcomes": action_outcomes(indices, up, comp, rules, post_split),
+        "dealer_dist": dealer_distribution(comp, up, rules),
+        "drivers": composition_drivers(comp, deck_count),
+        "baseline_best": baseline_result["best"] if baseline_result else None,
+        "baseline_evs": baseline_result["evs"] if baseline_result else None,
+        "hand_total": hand_state(indices),
+        "comp": comp,
+    }
+
+
+def inspect_from_per_rank(player_cards, dealer_rank, per_rank: dict,
+                          deck_count: int | None = None,
+                          rules: Rules | None = None,
+                          post_split: bool = False):
+    """inspect_hand from CardCounter.per_rank seen-counts (the live path —
+    the snapshot's count block carries per_rank)."""
+    if deck_count is None:
+        deck_count = constants.DECK_COUNT
+    return inspect_hand(player_cards, dealer_rank,
+                        comp_from_per_rank(per_rank, deck_count),
+                        deck_count, rules, post_split)
+
+
 def advise(player_cards, dealer_rank, per_rank: dict,
            deck_count: int | None = None, rules: Rules | None = None,
            post_split: bool = False):

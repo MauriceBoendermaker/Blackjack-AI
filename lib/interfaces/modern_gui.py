@@ -616,7 +616,8 @@ class ModernBlackjackGUI(tk.Tk):
         wrapper.columnconfigure(0, weight=1)
         self.table = TableView(wrapper, self._on_card_click, self._on_dealer_click,
                                self._on_split_click, self._on_seat_name_click,
-                               self._on_dealer_extra_click)
+                               self._on_dealer_extra_click,
+                               on_advice_click=self._on_advice_click)
         self.table.canvas.grid(row=0, column=0, sticky="nsew")
         # Clicking the felt parks keyboard focus back on the window — an
         # Entry otherwise keeps focus for the whole session after one click
@@ -1083,6 +1084,24 @@ class ModernBlackjackGUI(tk.Tk):
                                                 self.controller.engine.store)
         if deck:
             self.trainer_window.load_replay_deck(deck, label="leak drill")
+
+    def _on_advice_click(self, seat_index):
+        """Open the EV inspector for a seat's advice line (V3 F8)."""
+        snap = self.controller.engine.get_snapshot()
+        if not snap:
+            return
+        seat = next((s for s in snap["seats"] if s["index"] == seat_index),
+                    None)
+        if seat is None \
+                or len([c for c in seat["cards"] if c and c != "-"]) < 2 \
+                or not snap["dealer"]["card"]:
+            self.set_status("Nothing to inspect yet — the seat needs two "
+                            "cards and the dealer an up-card.")
+            return
+        from .inspector_window import InspectorWindow
+        InspectorWindow(self, seat=seat, dealer=snap["dealer"]["card"],
+                        per_rank=snap["count"].get("per_rank") or {},
+                        deck_count=self.controller.engine.counter.deck_count)
 
     def _open_leaks(self):
         store = self.controller.engine.store

@@ -254,7 +254,16 @@ every input is a `rounds`-table query. No new math.
 
 **Effort:** ~2 days.
 
-## 8. EV explainability inspector ("why this play?")
+## 8. ✅ EV explainability inspector ("why this play?") — COMPLETED
+
+**Status: DONE** — ev_engine gains `action_outcomes` (per-action P(win/push/
+lose) via an outcome recursion following the EV-optimal policy, validated by
+the EV=W−L / EV=2(W−L) identities against the WoO-anchored recursion),
+`dealer_distribution` (17–21/BJ/bust display dist), `composition_drivers`,
+and the picklable `inspect_hand` job with a fresh-shoe flip indicator.
+Clicking any advice line on the felt opens `InspectorWindow` (EV bars,
+outcome odds, dealer dist, drivers) with a what-if sandbox (editable hand,
+up-card, per-rank remaining counts) recomputed on the advice pool.
 
 **What:** Click any advice line → an inspector panel showing the *whole*
 decision, not the conclusion: per-action EV bars (Stand/Hit/Double/Split/
