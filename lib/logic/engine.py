@@ -1902,7 +1902,11 @@ class DetectionEngine:
         """Apply interpreted OCR readings to the live state (split out of
         _ocr_job so tests can exercise it without an OCR backend)."""
         balance = values.get("balance")
-        if balance and constants.OCR.get("sync_bankroll"):
+        # `is not None`, not truthiness: ocr.parse_amount returns None when
+        # it can't read a number and 0.0 for a genuine "0" — a real €0
+        # balance (tapped out, demo table) must sync, only a FAILED read
+        # is skipped. `if balance and` swallowed both.
+        if balance is not None and constants.OCR.get("sync_bankroll"):
             if balance > 10_000_000:
                 # Same bound the GUI enforces on manual entry — an OCR misread
                 # must not push the bankroll where its display formatting (and
@@ -1917,7 +1921,10 @@ class DetectionEngine:
                 # animations would otherwise rewrite settings.json at 1 Hz.
                 self._settings_dirty = True
         bet = values.get("bet")
-        if bet and constants.OCR.get("sync_bet"):
+        # Same fix: bet 0 is the norm between rounds and after a clear —
+        # a real €0 must sync the field to 0, only None (no read) is
+        # skipped.
+        if bet is not None and constants.OCR.get("sync_bet"):
             table_max = float(constants.BETTING.get("table_max") or 0)
             clamped = (min(max(bet, 0.0), table_max) if table_max > 0
                        else max(bet, 0.0))

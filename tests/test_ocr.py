@@ -58,6 +58,56 @@ class RegionProfiles(unittest.TestCase):
         self.assertIsNone(ocr.load_regions(self.RES))
 
 
+class ApplyOcrValues(unittest.TestCase):
+    """The engine's sync of interpreted OCR readings into bankroll /
+    bet_placed. A genuine 0 must apply (it's the screen's truth); a
+    failed read (None) must not."""
+
+    def setUp(self):
+        from lib.logic.engine import DetectionEngine
+        self._betting = dict(constants.BETTING)
+        self._ocr = dict(constants.OCR)
+        constants.OCR.update(enabled=1, sync_bankroll=1, sync_bet=1)
+        constants.BETTING["bankroll"] = 975.0
+        self.eng = DetectionEngine(log=lambda *a, **k: None)
+        self.eng.store = None
+        self.eng.bet_placed = 5.0
+
+    def tearDown(self):
+        constants.BETTING.clear()
+        constants.BETTING.update(self._betting)
+        constants.OCR.clear()
+        constants.OCR.update(self._ocr)
+
+    def _apply(self, **vals):
+        base = {"balance": None, "bet": None, "result": None,
+                "status": None, "timer": None, "stray_text": False}
+        self.eng._apply_ocr_values({**base, **vals})
+
+    def test_zero_balance_and_bet_sync(self):
+        # The reported bug: screen shows 0/0, app keeps stale 975/5.
+        self._apply(balance=0.0, bet=0.0)
+        self.assertEqual(constants.BETTING["bankroll"], 0.0)
+        self.assertEqual(self.eng.bet_placed, 0.0)
+
+    def test_failed_read_does_not_zero_state(self):
+        self._apply(balance=None, bet=None)
+        self.assertEqual(constants.BETTING["bankroll"], 975.0)
+        self.assertEqual(self.eng.bet_placed, 5.0)
+
+    def test_nonzero_still_syncs(self):
+        self._apply(balance=1200.0, bet=40.0)
+        self.assertEqual(constants.BETTING["bankroll"], 1200.0)
+        self.assertEqual(self.eng.bet_placed, 40.0)
+
+    def test_sync_toggles_respected(self):
+        constants.OCR["sync_bankroll"] = 0
+        constants.OCR["sync_bet"] = 0
+        self._apply(balance=0.0, bet=0.0)
+        self.assertEqual(constants.BETTING["bankroll"], 975.0)
+        self.assertEqual(self.eng.bet_placed, 5.0)
+
+
 @unittest.skipUnless(ocr.OCR_AVAILABLE, "winocr not installed")
 class LiveOcr(unittest.TestCase):
     def test_reads_rendered_ui_text(self):
