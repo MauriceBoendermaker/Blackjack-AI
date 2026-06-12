@@ -127,10 +127,13 @@ def ramp_metrics(ramp, freqs, betting_cfg=None, bankroll_eur=None,
     }
 
 
-def _build_ramp(scale, freqs, b, bank, chip_step, table_min, eff_max,
-                sit_out_negative):
+def _build_ramp(scale, freqs, b, bank, chip_step, table_min, table_max,
+                max_spread, sit_out_negative):
     """One candidate: full-Kelly bets x scale, chip-rounded, clamped,
-    monotone non-decreasing in TC."""
+    monotone non-decreasing in TC, spread-capped relative to the ramp's
+    own SMALLEST placed bet (a wong-out ramp that never bets the table
+    minimum may spread from its real floor — anchoring the cap to
+    table_min would forfeit that EV)."""
     v = float(b["variance"])
     ramp = {}
     prev = 0.0
@@ -140,10 +143,16 @@ def _build_ramp(scale, freqs, b, bank, chip_step, table_min, eff_max,
             bet = 0.0 if sit_out_negative else table_min
         else:
             kelly = bank * scale * edge / v
-            bet = min(max(chip_round(kelly, chip_step), table_min), eff_max)
+            bet = min(max(chip_round(kelly, chip_step), table_min), table_max)
         bet = max(bet, prev)  # rounding must never dip the ramp
         ramp[tc] = bet
         prev = bet
+    positive = [x for x in ramp.values() if x > 0]
+    if positive and max_spread:
+        cap = min(positive) * max_spread
+        if chip_step > 0:  # down to the chip grid: the cap is a hard limit
+            cap = math.floor(cap / chip_step + 1e-9) * chip_step
+        ramp = {tc: min(bet, cap) for tc, bet in ramp.items()}
     return ramp
 
 
@@ -167,8 +176,6 @@ def optimize(betting_cfg=None, freqs=None, *, target_ror=0.05,
     bank = float(bankroll_eur if bankroll_eur is not None else b["bankroll"])
     table_min = max(1.0, float(b["table_min"]))
     table_max = float(b["table_max"]) if b["table_max"] else float("inf")
-    eff_max = min(table_max, table_min * max_spread if max_spread
-                  else float("inf"))
     if freqs is None:
         freqs = dict(bankroll.TC_FREQUENCIES)
 
@@ -183,7 +190,7 @@ def optimize(betting_cfg=None, freqs=None, *, target_ror=0.05,
     for i in range(_SCAN_POINTS):
         scale = _SCAN_LO * ratio ** i
         ramp = _build_ramp(scale, freqs, b, bank, chip_step, table_min,
-                           eff_max, sit_out_negative)
+                           table_max, max_spread, sit_out_negative)
         key = tuple(sorted(ramp.items()))
         if key in seen or not _spread_ok(ramp, max_spread):
             continue
@@ -213,8 +220,8 @@ def optimize(betting_cfg=None, freqs=None, *, target_ror=0.05,
                         if not sit_out_negative:
                             continue
                     if bet > 0 and (bet < table_min - 1e-9
-                                    or bet > eff_max + 1e-9):
-                        continue
+                                    or bet > table_max + 1e-9):
+                        continue  # spread is guarded by _spread_ok below
                     cand[tc] = bet
                     cells = sorted(cand)
                     if any(cand[a] > cand[c] + 1e-9 for a, c in

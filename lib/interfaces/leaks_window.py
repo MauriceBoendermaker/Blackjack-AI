@@ -30,6 +30,7 @@ class LeaksWindow(tk.Toplevel):
         self.store = store
         self.open_trainer = open_trainer  # callable(deck) -> trainer window
         self._result = None
+        self._closing = False
         self._queue = queue.Queue()
         self._pool = ThreadPoolExecutor(max_workers=1,
                                         thread_name_prefix="leaks-ev")
@@ -88,7 +89,12 @@ class LeaksWindow(tk.Toplevel):
 
     def _on_destroy(self, event):
         if event.widget is self:
-            self._pool.shutdown(wait=False)
+            # Stop the costing pass: cancel anything queued AND flip the
+            # abort flag the running pass checks between EV jobs — a
+            # non-daemon worker grinding orphaned subprocess work would
+            # otherwise survive the window and delay app exit.
+            self._closing = True
+            self._pool.shutdown(wait=False, cancel_futures=True)
 
     def _drain_queue(self):
         if not self.winfo_exists():
@@ -122,14 +128,22 @@ class LeaksWindow(tk.Toplevel):
             self.status_var.set("")
 
     def _cost_job(self, result):
+        # Price a COPY off-thread: the Tk thread renders/exports the live
+        # result object and must never see a half-priced, mid-sort list.
+        import copy
+        play = copy.deepcopy(result["play"])
         try:
-            leaks.cost_play_leaks(result["play"])
+            leaks.cost_play_leaks(
+                play, abort=lambda: self._closing or self._result is not result)
         except Exception:
             pass
+        if self._closing:
+            return
 
         def deliver():
             if self._result is not result:
                 return  # user changed scope while we were pricing
+            result["play"] = play
             self.status_var.set("")
             self._render(result, costing=False)
         self._queue.put(deliver)

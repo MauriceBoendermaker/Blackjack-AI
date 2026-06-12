@@ -492,6 +492,11 @@ there is. **Effort:** ~1–2 days.
 
 ## Suggested order
 
+> **Progress (2026-06-12):** 1 ✅ · 2 ✅ · 5 ✅ · 6 ✅ · 8 ✅ · E2 ✅ · E3 ✅ ·
+> E5 ✅ — eight of fifteen complete. Open: 3 (multi-table), 4 (simulation
+> lab), 7 (luck-vs-skill), 9 (variant packs), 10 (companion HUD), E1
+> (local-first detection), E4 (table fingerprinting).
+
 1. **Feature 1 → Feature 2** — the phase engine, then ghost mode → one-key
    assist (the commissioned autonomy track, stopping at stage 2).
 2. **E2 + E1** — bet call inside the betting window; local inference + the

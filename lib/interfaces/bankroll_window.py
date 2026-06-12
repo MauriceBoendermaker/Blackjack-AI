@@ -355,11 +355,15 @@ class BankrollWindow(tk.Toplevel):
                        f"({opt_m['ror'] * 100:.1f}%). Lower the target, the "
                        "table min, or grow the bankroll.")
         else:
+            # Modest size on purpose: this runs synchronously on the Tk
+            # thread (the Risk tab's Monte Carlo precedent) — a readout,
+            # not the optimizer.
             mc = br.monte_carlo(
-                ramp_optimizer.synth_outcomes(result["ramp"], freqs),
-                constants.BETTING["bankroll"], n_rounds=5000, trials=4000)
+                ramp_optimizer.synth_outcomes(result["ramp"], freqs,
+                                              n=10_000),
+                constants.BETTING["bankroll"], n_rounds=3000, trials=2000)
             verdict = (f"Scanned {result['evaluated']} candidates · MC check "
-                       f"(5k rounds): ruin {mc['ruin'] * 100:.1f}%, "
+                       f"(3k rounds): ruin {mc['ruin'] * 100:.1f}%, "
                        f"P(profit) {mc['p_profit'] * 100:.0f}%, median "
                        f"€{mc['final_p50']:+,.0f}" if mc else
                        f"Scanned {result['evaluated']} candidates")

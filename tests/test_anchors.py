@@ -194,6 +194,26 @@ class EngineIntegration(TempStore):
         left, top, _, _ = eng.regions[0].bounds
         self.assertAlmostEqual(left, 10 * 1.3 + 24, delta=4)
 
+    def test_identity_fit_keeps_exact_saved_geometry(self):
+        # Same resolution, nothing moved: the EXACT saved calibration must
+        # win over a fitted approximation (rounding jitter shaves crops).
+        from lib.logic.engine import DetectionEngine
+        self.save_test_anchors()
+        players = [[[10, 10], [60, 10], [60, 60], [10, 10]]] * 7
+        save_custom_regions(CALIB_RES, players, [100, 20, 200, 80])
+        ocr.save_regions(CALIB_RES, {"balance": [50, 50, 150, 80]})
+        eng = DetectionEngine(log=lambda *a, **k: None)
+        eng.store = None
+        eng.set_monitor(types.SimpleNamespace(x=0, y=0, width=800,
+                                              height=600, is_primary=False))
+        regions_before = eng.regions
+        ocr_before = eng._ocr_regions
+        eng._maybe_anchors(calib_frame())
+        snap = eng.get_snapshot()
+        self.assertEqual(snap["anchors"]["status"], "active")
+        self.assertIs(eng.regions, regions_before)
+        self.assertIs(eng._ocr_regions, ocr_before)
+
     def test_failed_solve_keeps_geometry_and_says_so(self):
         from lib.logic.engine import DetectionEngine
         self.save_test_anchors()

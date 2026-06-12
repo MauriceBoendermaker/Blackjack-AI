@@ -90,6 +90,15 @@ class ReplayDivergence(unittest.TestCase):
         self.assertIsNone(self.div([T, S, "9 of Spades", "2 of Hearts"],
                                    tc=-1.0))
 
+    def test_index_applies_on_multi_card_hands_too(self):
+        # Hitting to 16 vs T at TC +2, then standing: the live advice line
+        # applies the 16vT stand index at any hand length — standing is
+        # the app's own call, not a leak.
+        self.assertIsNone(self.div([T, "2 of Clubs", "4 of Spades"], tc=2.0))
+        # Below the index the same stand IS a divergence.
+        d = self.div([T, "2 of Clubs", "4 of Spades"], tc=-1.0)
+        self.assertEqual((d["expected"], d["played"]), ("H", "S"))
+
     def test_non_hittable_split_aces_abstain(self):
         self.assertIsNone(self.div(["Ace of Hearts", "9 of Clubs"],
                                    post_split=True))
@@ -165,6 +174,23 @@ class FindLeaks(unittest.TestCase):
         # pre-deal TC 0 is an index stand — no play leaks at all.
         self.assertEqual(result["play"], [])
 
+    def test_shoe_boundary_breaks_the_lag_pairing(self):
+        # Round 1 ends a shoe at a sit-out call; the shoe is then shuffled
+        # (cards_seen drops). Round 2's bet must NOT be judged against the
+        # dead shoe's suggestion.
+        s1 = snap(1, tc=-2.0, seats=[seat([T, S])], settlement=settled([T, S]),
+                  bet_placed=10.0, bet_suggested=10.0, bet_sit_out=True,
+                  edge_exact=-0.015)
+        s1["count"]["cards_seen"] = 300
+        s2 = snap(2, tc=0.0, seats=[seat([T, "9 of Clubs"])],
+                  settlement=settled([T, "9 of Clubs"]), bet_placed=50.0)
+        s2["count"]["cards_seen"] = 20  # fresh shoe
+        self.store.record_round(s1)
+        self.store.record_round(s2)
+        result = leaks.find_leaks(self.store)
+        self.assertEqual(result["bets"]["missed_sit_outs"], 0)
+        self.assertEqual(result["bets"]["compared"], 0)
+
     def test_persisted_suggestion_columns_round_trip(self):
         self.store.record_round(snap(1, tc=1.0, seats=[seat([T, S])],
                                      bet_suggested=40.0, bet_sit_out=False,
@@ -200,6 +226,11 @@ class CostingAndDeck(unittest.TestCase):
         self.assertGreater(g["cost_per_error"], 0.0)
         self.assertLess(g["cost_per_error"], 0.30)
         self.assertAlmostEqual(g["cost_units"], g["cost_per_error"] * 3)
+
+    def test_costing_aborts_between_jobs(self):
+        result = self._result()
+        leaks.cost_play_leaks(result["play"], abort=lambda: True)
+        self.assertIsNone(result["play"][0]["cost_units"])
 
     def test_drill_items_weighted_and_capped(self):
         result = self._result()

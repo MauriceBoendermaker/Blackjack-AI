@@ -23,8 +23,17 @@ recorded nowhere (the insurance column stores table-level advice only).
 
 Two-step API because EV costing needs subprocesses: find_leaks() is pure
 SQL/JSON and safe on any thread; cost_play_leaks() prices the play-error
-groups via ev_offload and must be called OFF the Tk thread (it blocks on
-the worker pool).
+groups via ev_offload (the dedicated "analysis" pool — never the live
+advice or predeal workers) and must be called OFF the Tk thread.
+
+Known staleness, accepted and labeled rather than hidden: the persisted
+bet_suggested/edge_exact are snapshot values at round END, and the exact
+edge in them comes from the sweep that ran in the PREVIOUS between-rounds
+window — when the exact-edge model is on, the suggestion a row carries
+can be one sweep older than the bet call the player actually saw. The
+honest fix is freezing the suggestion at the round's first card
+(the V4 discipline-guard design); until then, bet-discipline numbers are
+directionally right and exact only for the linear-TC model.
 """
 
 import html
@@ -88,9 +97,12 @@ def replay_divergence(card_names, dealer_rank, advisor, tc=0.0,
         if action is None:
             return None
         expected = _book_primary(action, len(current))
-        if dealer and len(current) == 2 and not post_split:
+        if dealer and not post_split:
+            # Index plays apply at every decision point exactly like the
+            # live advice line (engine passes two_cards=len(hand)==2 —
+            # D/P deviations drop on 3+ cards, stand/hit ones stay).
             dev = deviations.index_advice(cards.hand_key(current), dealer,
-                                          tc, two_cards=True)
+                                          tc, two_cards=len(current) == 2)
             if dev is not None:
                 expected = dev["action"]
                 if expected == "R":  # unoffered online — book fallback
@@ -147,7 +159,7 @@ def _rows(store, session_only):
         cols = [r[1] for r in con.execute("PRAGMA table_info(rounds)")]
         has_sugg = "bet_suggested" in cols
         select = ("SELECT session_id, true_count, dealer_card, seats,"
-                  " settlement, side_bets, bet_eur, pnl_eur"
+                  " settlement, side_bets, bet_eur, pnl_eur, cards_seen"
                   + (", bet_suggested, bet_sit_out, edge_exact" if has_sugg
                      else ", NULL, NULL, NULL")
                   + f" FROM rounds {where} ORDER BY id")
@@ -162,10 +174,22 @@ def _rows(store, session_only):
         rows.append({"session_id": r[0], "true_count": r[1],
                      "dealer_card": r[2], "seats": js(r[3]),
                      "settlement": js(r[4]), "side_bets": js(r[5]),
-                     "bet_eur": r[6], "pnl_eur": r[7],
-                     "bet_suggested": r[8], "bet_sit_out": r[9],
-                     "edge_exact": r[10]})
+                     "bet_eur": r[6], "pnl_eur": r[7], "cards_seen": r[8],
+                     "bet_suggested": r[9], "bet_sit_out": r[10],
+                     "edge_exact": r[11]})
     return rows
+
+
+def _chained(prev, row):
+    """True when row pairs with prev for the one-row count lag: same app
+    session AND same shoe (a cards_seen drop between rows is the only
+    persisted shoe-reset marker — across it the previous row's count says
+    nothing about this round)."""
+    if prev is None or prev["session_id"] != row["session_id"]:
+        return False
+    if prev["cards_seen"] is None or row["cards_seen"] is None:
+        return True
+    return row["cards_seen"] >= prev["cards_seen"]
 
 
 def find_leaks(store, session_only=False):
@@ -186,8 +210,8 @@ def find_leaks(store, session_only=False):
     for row in rows:
         # ---- play errors (this row's own settled hands; the row's TC is
         # post-round — the PRE-deal count lives on the previous row)
-        pre_tc = (prev["true_count"] if prev is not None
-                  and prev["session_id"] == row["session_id"] else 0.0) or 0.0
+        chained = _chained(prev, row)
+        pre_tc = (prev["true_count"] if chained else 0.0) or 0.0
         owned = row["pnl_eur"] is not None
         if owned:
             owned_rounds += 1
@@ -214,8 +238,7 @@ def find_leaks(store, session_only=False):
                                           "tc": pre_tc, "split": split})
 
         # ---- bet discipline / sit-outs (needs the previous row's count)
-        if owned and prev is not None \
-                and prev["session_id"] == row["session_id"]:
+        if owned and chained:
             placed = row["bet_eur"]
             if placed and placed > 0:
                 if prev["bet_suggested"] is not None:
@@ -257,8 +280,7 @@ def find_leaks(store, session_only=False):
         # placed against)
         settle = row["settlement"] or {}
         sb_settle = settle.get("side_bets") or {}
-        if sb_settle and prev is not None \
-                and prev["session_id"] == row["session_id"]:
+        if sb_settle and chained:
             evs = {item.get("key"): item.get("ev")
                    for item in (prev["side_bets"] or [])}
             for seat_bets in sb_settle.values():
@@ -295,7 +317,9 @@ def _cost_one(example, expected, played):
     dealer = ev_engine.card_index(example["dealer"])
     comp = trainer._comp_for_tc(example["tc"], list(hand) + [dealer])
     rules = ev_engine.current_rules()
-    result = ev_offload.run("predeal", ev_engine.evaluate, hand, dealer,
+    # Dedicated pool: costing must never queue behind (or in front of)
+    # the live advice worker or the betting-window sweep.
+    result = ev_offload.run("analysis", ev_engine.evaluate, hand, dealer,
                             comp, rules, bool(example.get("split")))
     evs = result["evs"]
     if expected == "P" or played == "no-split":
@@ -312,15 +336,19 @@ def _cost_one(example, expected, played):
     return max(0.0, exp_ev - played_ev)
 
 
-def cost_play_leaks(play_groups):
+def cost_play_leaks(play_groups, abort=None):
     """Fill cost_units on each play-error group (mean exact-EV loss per
-    occurrence x count). BLOCKS on ev_offload — never the Tk thread."""
+    occurrence x count). BLOCKS on ev_offload — never the Tk thread.
+    `abort` (callable -> bool) is checked between EV jobs so a closed
+    window stops the pass instead of grinding orphaned subprocess work."""
     if not play_groups:
         return play_groups
     per_group = max(1, _MAX_EV_JOBS // len(play_groups))
     for group in play_groups:
         costs = []
         for example in group["examples"][:per_group]:
+            if abort is not None and abort():
+                return play_groups
             try:
                 cost = _cost_one(example, group["expected"], group["played"])
             except Exception:

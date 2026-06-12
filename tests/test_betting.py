@@ -82,7 +82,13 @@ class MultiSeatKelly(unittest.TestCase):
         double = betting.suggest(3.0, cfg, seats=2)
         self.assertAlmostEqual(single["bet"], 200.0)
         self.assertAlmostEqual(double["bet"],
-                               round(200.0 * 1.33 / (1.33 + 0.479)))
+                               round(200.0 * 1.33 / (1.33 + 0.479), 2))
+
+    def test_half_euro_ramp_values_survive(self):
+        # The designer chip-rounds at 0.50 steps — installed values must
+        # not be silently re-rounded to whole euros.
+        cfg = dict(self.CFG, bet_table={"2": 12.5}, table_min=1)
+        self.assertEqual(betting.suggest(2.0, cfg)["bet"], 12.5)
 
     def test_min_bet_branch_unaffected(self):
         self.assertEqual(betting.suggest(0, self.CFG, seats=3)["bet"],

@@ -423,11 +423,13 @@ class SessionStore:
                 "SELECT ts, session_id, round_number, running_count, true_count,"
                 " decks_remaining, cards_seen, dealer_card, dealer_extras, seats,"
                 " insurance, side_bets, settlement, pnl_units, pnl_eur, bet_eur,"
-                " paytable_hash FROM rounds ORDER BY id").fetchall()
+                " paytable_hash, bet_suggested, bet_sit_out, edge_exact"
+                " FROM rounds ORDER BY id").fetchall()
         header = ["timestamp", "session", "round", "running_count", "true_count",
                   "decks_remaining", "cards_seen", "dealer_card", "dealer_extras",
                   "seats", "insurance", "side_bets", "settlement", "pnl_units",
-                  "pnl_eur", "bet_eur", "paytable_hash"]
+                  "pnl_eur", "bet_eur", "paytable_hash", "bet_suggested",
+                  "bet_sit_out", "edge_exact"]
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(header)

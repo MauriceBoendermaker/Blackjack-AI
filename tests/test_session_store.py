@@ -65,6 +65,10 @@ class StoreRoundTrip(unittest.TestCase):
         text = out.read_text(encoding="utf-8")
         self.assertIn("true_count", text)
         self.assertIn("10 of Hearts", text)
+        # The V3 F6 columns export too — a backup must not silently drop
+        # the persisted ramp suggestions.
+        for col in ("bet_suggested", "bet_sit_out", "edge_exact"):
+            self.assertIn(col, text)
 
 
 class RampDesignerQueries(unittest.TestCase):

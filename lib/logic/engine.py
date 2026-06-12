@@ -1465,14 +1465,15 @@ class DetectionEngine:
         drift re-check of an active fit."""
         if not constants.ANCHORS.get("enabled"):
             return
-        if self._anchor_pending:
-            self._anchor_pending = False
-            self._resolve_anchors(frame)
-            return
         with self._lock:
+            pending = self._anchor_pending
+            self._anchor_pending = False
             fit = self._anchor_state["fit"]
             drifted = self._anchor_state["drift"]
             anchor_set = self._anchor_set
+        if pending:
+            self._resolve_anchors(frame)
+            return
         if fit is None or drifted or not anchor_set:
             return
         now = time.monotonic()
@@ -1515,6 +1516,25 @@ class DetectionEngine:
             self.log("Anchor solve failed (anchors not found on this "
                      "screen) — keeping the current calibration; geometry "
                      "may be wrong here.", level="WARNING")
+            self.publish_snapshot()
+            return
+        # Identity fit at the calibrated resolution: the screen is exactly
+        # where it was calibrated — keep the EXACT saved geometry instead
+        # of replacing it with a fitted approximation (rounding jitter
+        # would shave OCR crops for nothing). Drift checking still arms.
+        if (tuple(calib_res) == tuple(res)
+                and abs(fit["scale"] - 1.0) < 0.005
+                and abs(fit["dx"]) < 2.0 and abs(fit["dy"]) < 2.0):
+            with self._lock:
+                self._anchor_set = anchor_set
+                self._anchor_state = {
+                    "status": "active", "fit": fit, "drift": False,
+                    "calib_res": f"{calib_res[0]}x{calib_res[1]}"}
+            self._anchor_drift_at = (
+                time.monotonic() + float(constants.ANCHORS["drift_check_s"]))
+            self.log(f"Anchors confirm the saved calibration "
+                     f"({fit['matched']} anchor(s), score {fit['score']:.2f})"
+                     " — exact geometry kept.")
             self.publish_snapshot()
             return
         regions_payload = load_custom_regions(calib_res)
@@ -2038,7 +2058,12 @@ class DetectionEngine:
                 "bet_suggested": suggestion["bet"],
                 "bet_sit_out": suggestion["sit_out"],
                 "bet_behind": self._bet_behind_text(suggestion["edge"]),
-                "edge_exact": self._predeal["edge"],
+                # Gated like the suggestion path: with the exact-edge model
+                # off, a frozen stale sweep value must not be published (or
+                # persisted — the leak finder prices bets with it).
+                "edge_exact": (self._predeal["edge"]
+                               if constants.BETTING.get("use_exact_edge")
+                               else None),
                 "bet_placed": self.bet_placed,
                 "bankroll": float(constants.BETTING["bankroll"]),
                 "bet_capped_rounds": self.bet_capped_rounds,

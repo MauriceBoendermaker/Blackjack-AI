@@ -130,7 +130,12 @@ def prewarm(*names):
         return
     for name in names:
         try:
-            _pool(name).submit(int)
+            pool = _pool(name)
+            # One no-op per WORKER: a single submit spawns one child and
+            # the sized predeal pool would still pay the other spawns on
+            # its first real betting-window sweep.
+            for _ in range(_workers(name)):
+                pool.submit(int)
         except (RuntimeError, OSError):
             pass
 

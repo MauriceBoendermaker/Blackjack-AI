@@ -210,10 +210,16 @@ class AnchorEditor(tk.Toplevel):
         active = region_profiles.active_name()
         if not messagebox.askyesno(
                 "Clear anchors",
-                f"Remove the anchors of profile \"{active}\" for this "
-                "resolution? Resolution-independent mapping switches off "
-                "until you re-capture.", parent=self):
+                f"Remove ALL anchors of profile \"{active}\"? "
+                "Resolution-independent mapping switches off until you "
+                "re-capture.", parent=self):
             return
+        # Every resolution, not just the live one: anchors captured at the
+        # CALIBRATED resolution drive the cross-resolution remap — leaving
+        # them behind would keep remapping geometry after a 'clear'.
+        for key in region_profiles.anchor_resolutions():
+            w, h = key.split("x")
+            region_profiles.delete_anchors((int(w), int(h)))
         region_profiles.delete_anchors(self.resolution)
         if self.on_save:
             self.on_save()

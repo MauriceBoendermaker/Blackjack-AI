@@ -9,9 +9,10 @@ fresh-shoe counterfactual flip indicator. A what-if sandbox lets the hand,
 up-card, or remaining-shoe composition be edited and re-solved by the same
 oracle-validated engine — an interactive exact-EV calculator.
 
-Computation runs in the ev_offload "advice" subprocess (the same worker
-that priced the live hand, so its memo caches are already warm) via a
-1-worker thread + queue + after() drain — the trainer-window recipe.
+Computation runs in the dedicated ev_offload "analysis" subprocess —
+inspect jobs are several times an advise() and must never queue a live
+seat's advice behind them — via a 1-worker thread + queue + after()
+drain (the trainer-window recipe).
 """
 
 import queue
@@ -95,7 +96,7 @@ class InspectorWindow(tk.Toplevel):
 
     def _on_destroy(self, event):
         if event.widget is self:
-            self._pool.shutdown(wait=False)
+            self._pool.shutdown(wait=False, cancel_futures=True)
 
     def _drain_queue(self):
         if not self.winfo_exists():
@@ -134,7 +135,10 @@ class InspectorWindow(tk.Toplevel):
 
         def work():
             try:
-                result = ev_offload.run("advice", ev_engine.inspect_hand,
+                # Dedicated "analysis" worker: an inspect job is several
+                # times an advise() and must never queue a live seat's
+                # advice behind it (the advice pool is one process).
+                result = ev_offload.run("analysis", ev_engine.inspect_hand,
                                         cards, dealer, comp, self.deck_count,
                                         rules, post_split)
                 error = None

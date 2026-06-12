@@ -92,7 +92,10 @@ def suggest(true_count, betting=None, exact_edge=None, seats=1) -> dict:
                              f"edge {edge:+.2%} ({tag})"),
                     "capped": False}
         table_bet *= factor  # the designed table assumed one seat
-        bet = round(min(max(table_bet, table_min), table_max))
+        # Two decimals, not whole euros: the designer chip-rounds its
+        # table (0.50 steps are legal) and the installed values must
+        # survive verbatim at one seat.
+        bet = round(min(max(table_bet, table_min), table_max), 2)
         return {"edge": edge, "bet": float(bet), "sit_out": False,
                 "text": (f"Bet €{bet:g} (ramp TC {tc_bucket:+d}"
                          f"{seats_note}; edge {edge:+.2%} {tag})"),
