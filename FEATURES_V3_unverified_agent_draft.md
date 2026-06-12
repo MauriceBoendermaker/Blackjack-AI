@@ -456,7 +456,17 @@ block start until confirmed. Unknown table → offer to create a profile.
 "can't use the wrong one," and is the on-ramp for Feature 3 (per-window
 profile binding must be automatic at N tables). **Effort:** ~1–2 days.
 
-## E5. Covariance-aware multi-seat Kelly + session guardrails
+## E5. ✅ Covariance-aware multi-seat Kelly + session guardrails — COMPLETED
+
+**Status: DONE** — (1) `betting.multi_seat_factor` (v/(v+(k−1)c), c=0.479
+WoO) shrinks the per-seat wager when k seats are starred (engine passes
+`len(my_seats)`; formula and installed ramp alike; two seats ≈ 73.5% each),
+`bankroll.model_round_stats(seats=k)` carries k·v+k(k−1)·c into every RoR
+readout, bankroll window notes the k-seat sizing. (2) `constants.GUARDRAILS`
+(fail-disabled default) → engine publishes a `guardrails` snapshot block
+(stop-loss / stop-win / max-rounds vs live session P&L), HUD banner line +
+status-bar banner render it, the executor auto-disarms on breach, settings
+dialog/persistence wired.
 
 **Enhances:** v1 F7 (Kelly ramp) + V2 F2 (bankroll & risk).
 

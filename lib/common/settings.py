@@ -46,6 +46,7 @@ def snapshot() -> dict:
         "app": {name: getattr(constants, name) for name in _APP_ATTRS},
         "ocr": {key: constants.OCR[key] for key in _OCR_TOGGLES},
         "phase": {"enabled": constants.PHASE["enabled"]},
+        "guardrails": dict(constants.GUARDRAILS),
         # The API key persists in plaintext like every other local setting;
         # ANTHROPIC_API_KEY overrides it without touching the file.
         "vision": {key: constants.VISION[key]
@@ -123,6 +124,22 @@ def apply(data: dict):
     phase_cfg = data.get("phase", {})
     if "enabled" in phase_cfg:
         constants.PHASE["enabled"] = int(bool(phase_cfg["enabled"]))
+    guard = data.get("guardrails", {})
+    if "enabled" in guard:
+        constants.GUARDRAILS["enabled"] = int(bool(guard["enabled"]))
+    for key, hi in (("stop_loss_eur", 1_000_000.0),
+                    ("stop_win_eur", 1_000_000.0)):
+        if key in guard:
+            try:
+                constants.GUARDRAILS[key] = max(0.0, min(hi, float(guard[key])))
+            except (TypeError, ValueError):
+                pass
+    if "max_rounds" in guard:
+        try:
+            constants.GUARDRAILS["max_rounds"] = max(0, min(
+                100_000, int(guard["max_rounds"])))
+        except (TypeError, ValueError):
+            pass
     vision = data.get("vision", {})
     for key in ("enabled", "triage"):
         if key in vision:

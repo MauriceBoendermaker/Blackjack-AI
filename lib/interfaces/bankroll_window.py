@@ -105,6 +105,19 @@ class BankrollWindow(tk.Toplevel):
 
     # ------------------------------------------------------------- data
 
+    def _my_seat_count(self) -> int:
+        """Starred seats right now — the model's k for covariance-aware
+        multi-seat sizing (V3 E5). The empirical sample needs no k: the
+        recorded per-round EUR already contains the correlation."""
+        if self.engine is None:
+            return 1
+        try:
+            snap = self.engine.get_snapshot() or {}
+        except Exception:
+            return 1
+        return max(1, sum(1 for s in snap.get("seats", [])
+                          if s.get("mine")))
+
     def _round_stats(self):
         """((mu, sigma), outcomes, source_label) — empirical when possible."""
         outcomes = []
@@ -117,11 +130,14 @@ class BankrollWindow(tk.Toplevel):
         if stats is not None:
             return stats, outcomes, (f"Source: {len(outcomes)} recorded settled "
                                      "rounds (your actual results).")
-        mu_sigma = br.model_round_stats()
+        seats = self._my_seat_count()
+        mu_sigma = br.model_round_stats(seats=seats)
+        note = (f" Sizing for {seats} simultaneous seats (covariance-aware)."
+                if seats > 1 else "")
         return mu_sigma, outcomes, (
             "Source: TC-frequency model × your configured ramp "
             f"({len(outcomes)} settled rounds recorded — needs 30+ to switch "
-            "to your real data).")
+            f"to your real data).{note}")
 
     def refresh(self):
         (mu, sigma), _, source = self._round_stats()

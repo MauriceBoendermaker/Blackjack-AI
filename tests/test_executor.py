@@ -297,6 +297,18 @@ class ConfirmAndGuards(ExecutorBase):
         self.assertFalse(self.ex.armed)
         self.assertIn("anchor drift", self.ex.disarm_reason)
 
+    def test_session_guardrail_disarms(self):
+        # V3 E5: a breached session plan stops assisted clicks; the human
+        # can keep playing manually but nothing fires.
+        self._armed()
+        snap = make_snap()
+        snap["guardrails"] = {"enabled": True, "breached": True,
+                              "kind": "stop_win",
+                              "text": "STOP-WIN reached (€+120.00) — bank it"}
+        self.ex.step(snap)
+        self.assertFalse(self.ex.armed)
+        self.assertIn("session guardrail", self.ex.disarm_reason)
+
     def test_double_beyond_max_bet_disarms(self):
         constants.EXECUTOR["max_bet_eur"] = 15.0
         self._armed()

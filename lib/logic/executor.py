@@ -462,6 +462,12 @@ class Executor:
             # suspect until the user re-anchors.
             self._disarm_locked("anchor drift — calibration misaligned")
             return
+        guard = snap.get("guardrails") or {}
+        if guard.get("breached"):
+            # V3 E5: the session plan was breached — the human decides
+            # whether to keep playing, but nothing fires assisted clicks.
+            self._disarm_locked(f"session guardrail: {guard.get('text')}")
+            return
         pnl = (snap.get("session_pnl") or {}).get("eur", 0.0)
         stop_loss = float(cfg.get("stop_loss_eur") or 0)
         if stop_loss and pnl <= -stop_loss:

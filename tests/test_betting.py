@@ -53,6 +53,46 @@ class KellySizing(unittest.TestCase):
         self.assertIn("-EV", betting.bet_behind_hint(0, BASE))
 
 
+class MultiSeatKelly(unittest.TestCase):
+    """V3 E5: covariance-aware per-seat sizing for simultaneous seats."""
+
+    CFG = dict(BASE, bankroll=100_000, covariance=0.479)
+
+    def test_factor(self):
+        self.assertEqual(betting.multi_seat_factor(1, self.CFG), 1.0)
+        # Two hands sharing a dealer: v/(v+c) = 1.33/1.809 ~ 73.5% each.
+        self.assertAlmostEqual(betting.multi_seat_factor(2, self.CFG),
+                               1.33 / (1.33 + 0.479), places=12)
+        self.assertAlmostEqual(betting.multi_seat_factor(3, self.CFG),
+                               1.33 / (1.33 + 2 * 0.479), places=12)
+
+    def test_per_seat_bet_shrinks(self):
+        single = betting.suggest(3, self.CFG)
+        double = betting.suggest(3, self.CFG, seats=2)
+        self.assertAlmostEqual(
+            double["bet"], single["bet"] * 1.33 / (1.33 + 0.479), delta=1)
+        self.assertIn("2 seats", double["text"])
+        self.assertNotIn("seats", single["text"])
+        # Total action still grows: 2 x 73.5% ~ 1.47x of one hand.
+        self.assertGreater(2 * double["bet"], single["bet"])
+
+    def test_ramp_table_also_shrinks(self):
+        cfg = dict(self.CFG, bet_table={"3": 200.0})
+        single = betting.suggest(3.0, cfg)
+        double = betting.suggest(3.0, cfg, seats=2)
+        self.assertAlmostEqual(single["bet"], 200.0)
+        self.assertAlmostEqual(double["bet"],
+                               round(200.0 * 1.33 / (1.33 + 0.479)))
+
+    def test_min_bet_branch_unaffected(self):
+        self.assertEqual(betting.suggest(0, self.CFG, seats=3)["bet"],
+                         betting.suggest(0, self.CFG)["bet"])
+
+    def test_missing_covariance_key_is_factor_one(self):
+        cfg = {k: v for k, v in self.CFG.items() if k != "covariance"}
+        self.assertEqual(betting.multi_seat_factor(2, cfg), 1.0)
+
+
 class RampTable(unittest.TestCase):
     """V3 Feature 5: an installed per-TC bet table overrides the formula."""
 

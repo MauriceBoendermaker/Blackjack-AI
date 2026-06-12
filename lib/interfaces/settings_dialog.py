@@ -271,6 +271,21 @@ class SettingsDialog(tk.Toplevel):
                           "--remote-debugging-port)", "bool", None,
                           constants.EXECUTOR["use_cdp"])
 
+        row = self._heading(tab, row, "Session guardrails (banner + "
+                                      "executor disarm)")
+        row = self._field(tab, row, "guardrails:enabled", "Enforce the plan",
+                          "choice", [("Off", 0), ("On — banner on breach", 1)],
+                          int(constants.GUARDRAILS["enabled"]))
+        row = self._spin(tab, row, "guardrails:stop_loss_eur",
+                         "Stop-loss: banner beyond session −€", 0, 1_000_000,
+                         int(constants.GUARDRAILS["stop_loss_eur"]))
+        row = self._spin(tab, row, "guardrails:stop_win_eur",
+                         "Stop-win: banner beyond session +€ (0 = off)", 0,
+                         1_000_000, int(constants.GUARDRAILS["stop_win_eur"]))
+        row = self._spin(tab, row, "guardrails:max_rounds",
+                         "Max settled rounds per session (0 = off)", 0,
+                         100_000, int(constants.GUARDRAILS["max_rounds"]))
+
         row = self._heading(tab, row, "Claude vision assist (optional)")
         row = self._field(tab, row, "vision:enabled",
                           "Enable (calibration suggestions + screen triage)",
@@ -343,7 +358,7 @@ class SettingsDialog(tk.Toplevel):
     def _save(self):
         data = {"rules": {}, "side_bets": {}, "betting": {}, "ui": {},
                 "app": {}, "ocr": {}, "phase": {}, "vision": {},
-                "executor": {}}
+                "executor": {}, "guardrails": {}}
         for key, spec in self._vars.items():
             if key.startswith("sidebet:"):
                 data["side_bets"][key.split(":", 1)[1]] = {"enabled": bool(spec.get())}
@@ -362,6 +377,8 @@ class SettingsDialog(tk.Toplevel):
                 data["ocr"][key.split(":", 1)[1]] = int(value)
             elif key.startswith("phase:"):
                 data["phase"][key.split(":", 1)[1]] = int(value)
+            elif key.startswith("guardrails:"):
+                data["guardrails"][key.split(":", 1)[1]] = value
             elif key.startswith("vision:"):
                 name = key.split(":", 1)[1]
                 data["vision"][name] = (value if kind == "str"

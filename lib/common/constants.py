@@ -180,6 +180,10 @@ BETTING = {
     "base_edge": -0.005,     # house edge off the top for the configured rules
     "edge_per_tc": 0.005,    # standard Hi-Lo shoe-game slope
     "variance": 1.33,        # per-hand variance in squared units
+    # Covariance between simultaneous hands at the same table (they share
+    # the dealer; Wizard of Odds 0.479). Drives the per-seat Kelly shrink
+    # when multiple seats are starred (V3 E5): two hands at ~73.5% each.
+    "covariance": 0.479,
     "table_min": 10,
     "table_max": 5000,       # 0 = no max
     "auto_bankroll": 1,      # settle owned seats into the bankroll (1/0)
@@ -232,6 +236,17 @@ PHASE = {
     # Seconds after MY_TURN ends before the observed action is judged
     # against the advice (a clicked Hit takes a moment to land a card).
     "discipline_grace_s": 3.0,
+}
+
+# Session guardrails (V3 E5): the math panel knows the risk; this is the
+# piece that enforces the plan. Visual-only (banner + HUD line) plus
+# executor auto-disarm on breach — no audio, no enforcement of the human.
+# FAIL-DISABLED by default (V4 standing decision); 0 disables a limit.
+GUARDRAILS = {
+    "enabled": 0,
+    "stop_loss_eur": 200.0,   # breach when session P&L <= -stop_loss
+    "stop_win_eur": 0.0,      # breach when session P&L >= stop_win (0 = off)
+    "max_rounds": 0,          # breach after this many settled owned rounds
 }
 
 # Anchor-based resolution-independent calibration (V3 E3,

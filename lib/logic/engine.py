@@ -1423,6 +1423,33 @@ class DetectionEngine:
             self.log(f"Exact pre-deal edge: {edge:+.3%}")
         self.publish_snapshot()
 
+    # ----------------------------------------------------------- guardrails
+
+    def _guardrail_block(self) -> dict:
+        """Session guardrail verdict (V3 E5) from the live session P&L —
+        called inside publish_snapshot's locked section. Pure read; the
+        banner/HUD render it and the executor auto-disarms on breach."""
+        cfg = constants.GUARDRAILS
+        block = {"enabled": bool(cfg.get("enabled")), "breached": False,
+                 "kind": None, "text": ""}
+        if not block["enabled"]:
+            return block
+        pnl = float(self.session_pnl.get("eur", 0.0))
+        rounds = int(self.session_pnl.get("rounds", 0))
+        stop_loss = float(cfg.get("stop_loss_eur") or 0)
+        stop_win = float(cfg.get("stop_win_eur") or 0)
+        max_rounds = int(cfg.get("max_rounds") or 0)
+        if stop_loss and pnl <= -stop_loss:
+            block.update(breached=True, kind="stop_loss",
+                         text=f"STOP-LOSS hit (€{pnl:+.2f}) — walk away")
+        elif stop_win and pnl >= stop_win:
+            block.update(breached=True, kind="stop_win",
+                         text=f"STOP-WIN reached (€{pnl:+.2f}) — bank it")
+        elif max_rounds and rounds >= max_rounds:
+            block.update(breached=True, kind="max_rounds",
+                         text=f"Session limit: {rounds} rounds — take a break")
+        return block
+
     # --------------------------------------------------- anchor calibration
 
     def request_anchor_resolve(self):
@@ -1986,8 +2013,11 @@ class DetectionEngine:
                     "stake_suggested": betting.side_bet_stake(
                         item.get("ev"), item.get("variance")),
                 })
-            suggestion = betting.suggest(count["true"],
-                                         exact_edge=self._predeal_edge(ev_count))
+            suggestion = betting.suggest(
+                count["true"], exact_edge=self._predeal_edge(ev_count),
+                # Covariance-aware sizing (V3 E5): the suggested bet is
+                # PER SEAT, shrunk for the number of seats it rides on.
+                seats=max(1, len(self.my_seats)))
             if suggestion["capped"]:
                 # Latch only — _reset_round_state turns the many snapshots a
                 # round publishes into a single bet_capped_rounds tick.
@@ -2013,6 +2043,7 @@ class DetectionEngine:
                 "bankroll": float(constants.BETTING["bankroll"]),
                 "bet_capped_rounds": self.bet_capped_rounds,
                 "session_pnl": dict(self.session_pnl),
+                "guardrails": self._guardrail_block(),
                 "ocr": dict(self._ocr_last) if self._ocr_regions else None,
                 "phase": {**self._phase_state,
                           "discipline": dict(self.discipline)},

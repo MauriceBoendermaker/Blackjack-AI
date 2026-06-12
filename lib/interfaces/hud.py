@@ -76,14 +76,18 @@ def _phase_line(snap) -> tuple[str, str]:
 def format_hud_lines(snap) -> dict:
     """Snapshot -> display strings. Pure (testable without Tk).
 
-    Returns {"phase", "phase_color", "count", "bet", "insurance",
-    "seats": [str], "sidebets", "pnl"}.
+    Returns {"phase", "phase_color", "guardrail", "count", "bet",
+    "insurance", "seats": [str], "sidebets", "pnl"}.
     """
     count = snap["count"]
     phase_text, phase_color = _phase_line(snap)
+    guard = snap.get("guardrails") or {}
     lines = {
         "phase": phase_text,
         "phase_color": phase_color,
+        # Session guardrail breach (V3 E5): the one line that should
+        # outrank every other readout when it fires.
+        "guardrail": guard.get("text", "") if guard.get("breached") else "",
         "count": f"TC {count['true']:+.1f}   RC {count['running']:+d}   "
                  f"{count['decks_remaining']:.1f} decks",
         "bet": snap.get("bet", ""),
@@ -143,6 +147,7 @@ class OverlayHUD(tk.Toplevel):
         self._vars = {}
         self._labels = {}
         specs = [
+            ("guardrail", (constants.FONT_FAMILY, 12, "bold"), ALERT),
             ("phase", (constants.FONT_FAMILY, 13, "bold"), ALERT),
             ("count", (constants.FONT_FAMILY, 14, "bold"), FG),
             ("bet", (constants.FONT_FAMILY, 10, "bold"), FG),

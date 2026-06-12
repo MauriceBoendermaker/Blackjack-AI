@@ -57,6 +57,17 @@ class FormatHudLines(unittest.TestCase):
         self.assertNotIn("Hot 3", lines["sidebets"])  # only +EV bets flagged
         self.assertIn("€+87.50", lines["pnl"])
 
+    def test_guardrail_banner_line(self):
+        # V3 E5: a breached session guardrail outranks everything.
+        s = snap(guardrails={"enabled": True, "breached": True,
+                             "kind": "stop_win",
+                             "text": "STOP-WIN reached (€+120.00) — bank it"})
+        self.assertIn("STOP-WIN", format_hud_lines(s)["guardrail"])
+        s = snap(guardrails={"enabled": True, "breached": False,
+                             "kind": None, "text": ""})
+        self.assertEqual(format_hud_lines(s)["guardrail"], "")
+        self.assertEqual(format_hud_lines(snap())["guardrail"], "")
+
     def test_quiet_table_collapses(self):
         s = snap(insurance=None, side_bets=[], session_pnl={"rounds": 0})
         for seat in s["seats"]:

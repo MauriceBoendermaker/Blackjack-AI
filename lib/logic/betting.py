@@ -46,19 +46,42 @@ def ramp_bet(true_count, betting=None):
     return tc, buckets[tc]
 
 
-def suggest(true_count, betting=None, exact_edge=None) -> dict:
+def multi_seat_factor(seats, betting=None) -> float:
+    """Per-seat Kelly shrink for k simultaneous seats (V3 E5).
+
+    Hands at one table share the dealer, so their outcomes are positively
+    correlated (covariance ~0.479 units^2, Wizard of Odds) — k seats at
+    full single-hand size over-bet the bankroll. The k-hand optimum per
+    seat is v / (v + (k-1)c) of the single-hand bet: ~73.5% each at two
+    seats (~1.47x total action), ~58% at three."""
+    b = betting or constants.BETTING
+    k = max(1, int(seats))
+    if k == 1:
+        return 1.0
+    v = float(b["variance"])
+    c = float(b.get("covariance") or 0.0)
+    return v / (v + (k - 1) * c)
+
+
+def suggest(true_count, betting=None, exact_edge=None, seats=1) -> dict:
     """{"edge", "bet", "sit_out", "text", "capped"} for the current count.
     When the exact pre-deal EV is available (V2 Feature 3) it replaces the
     linear true-count estimate — the text says which one it used. "capped"
     is True iff the Kelly wager was clamped DOWN by the table max.
     An installed bet_table (ramp designer) overrides the formula: the bet
-    comes from the floored-TC bucket, 0 = sit out (bet 0.0)."""
+    comes from the floored-TC bucket, 0 = sit out (bet 0.0).
+    `seats` is the number of simultaneous seats the bet rides on — the
+    PER-SEAT wager shrinks by multi_seat_factor (covariance-aware Kelly,
+    V3 E5); applies to the formula and the installed ramp alike."""
     b = betting or constants.BETTING
     exact = exact_edge is not None
     edge = exact_edge if exact else estimate_edge(true_count, b)
     tag = "exact" if exact else "TC est."
     table_min = max(1.0, float(b["table_min"]))
     table_max = float(b["table_max"]) if b["table_max"] else float("inf")
+    k = max(1, int(seats))
+    factor = multi_seat_factor(k, b)
+    seats_note = f", {k} seats" if k > 1 else ""
 
     ramp = ramp_bet(true_count, b)
     if ramp is not None:
@@ -68,10 +91,11 @@ def suggest(true_count, betting=None, exact_edge=None) -> dict:
                     "text": (f"Sit out (ramp TC {tc_bucket:+d}) — "
                              f"edge {edge:+.2%} ({tag})"),
                     "capped": False}
+        table_bet *= factor  # the designed table assumed one seat
         bet = round(min(max(table_bet, table_min), table_max))
         return {"edge": edge, "bet": float(bet), "sit_out": False,
-                "text": (f"Bet €{bet:g} (ramp TC {tc_bucket:+d}; "
-                         f"edge {edge:+.2%} {tag})"),
+                "text": (f"Bet €{bet:g} (ramp TC {tc_bucket:+d}"
+                         f"{seats_note}; edge {edge:+.2%} {tag})"),
                 "capped": table_bet > table_max}
 
     if edge <= 0:
@@ -82,12 +106,12 @@ def suggest(true_count, betting=None, exact_edge=None) -> dict:
         return {"edge": edge, "bet": table_min, "sit_out": sit_out, "text": text,
                 "capped": False}
 
-    kelly = b["bankroll"] * b["kelly_fraction"] * edge / b["variance"]
+    kelly = b["bankroll"] * b["kelly_fraction"] * edge / b["variance"] * factor
     capped = kelly > table_max  # Kelly wanted more than the table allows
     bet = round(min(max(kelly, table_min), table_max))
     frac = {1.0: "full", 0.5: "1/2", 0.25: "1/4"}.get(b["kelly_fraction"],
                                                       f"{b['kelly_fraction']:g}x")
-    text = f"Bet €{bet:g} (edge {edge:+.2%} {tag}, {frac} Kelly)"
+    text = f"Bet €{bet:g} (edge {edge:+.2%} {tag}, {frac} Kelly{seats_note})"
     if bet >= table_max < float("inf"):
         text += " — table max"
     return {"edge": edge, "bet": float(bet), "sit_out": False, "text": text,

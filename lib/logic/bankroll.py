@@ -101,19 +101,26 @@ def empirical_round_stats(outcomes):
     return mu, math.sqrt(var)
 
 
-def model_round_stats(betting_cfg=None, tc_frequencies=None):
+def model_round_stats(betting_cfg=None, tc_frequencies=None, seats=1):
     """(mu, sigma) from the TC-frequency model x the configured ramp.
     Play-all assumption; the variance term uses the per-hand blackjack
-    variance and ignores the (small) between-TC spread of means."""
+    variance and ignores the (small) between-TC spread of means.
+
+    `seats` models k simultaneous seats (V3 E5): the per-seat bet shrinks
+    by the covariance-aware Kelly factor and the round variance is
+    k·v + k(k-1)·c per bet² — hands at one table share the dealer."""
     b = betting_cfg or constants.BETTING
     freqs = tc_frequencies or TC_FREQUENCIES
+    k = max(1, int(seats))
+    c = float(b.get("covariance") or 0.0)
+    round_var = k * float(b["variance"]) + k * (k - 1) * c
     mu = 0.0
     var = 0.0
     for tc, f in freqs.items():
         edge = betting.estimate_edge(tc, b)
-        bet = betting.suggest(tc, b)["bet"]
-        mu += f * edge * bet
-        var += f * b["variance"] * bet * bet
+        bet = betting.suggest(tc, b, seats=k)["bet"]
+        mu += f * k * edge * bet
+        var += f * round_var * bet * bet
     return mu, math.sqrt(var)
 
 

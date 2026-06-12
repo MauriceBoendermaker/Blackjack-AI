@@ -659,6 +659,11 @@ class ModernBlackjackGUI(tk.Tk):
                   bg=C["warning"], fg=C["bg_primary"], relief="flat", bd=0,
                   cursor="hand2", padx=4, font=constants.FONT_BODY_BOLD
                   ).pack(side=tk.LEFT)
+        # Session-guardrail banner (V3 E5): breached plan, no dismiss —
+        # it stands until the limits change or the session ends.
+        self.guardrail_banner = tk.Label(
+            bar, text="", font=constants.FONT_BODY_BOLD, bg=C["danger"],
+            fg="white", padx=10)
         # Anchor-drift badge (V3 E3): calibration may be misaligned; the
         # button re-solves the transform on the next worker cycle.
         self.anchor_badge = tk.Frame(bar, bg=C["danger"])
@@ -965,6 +970,14 @@ class ModernBlackjackGUI(tk.Tk):
                 var.set(text)
                 lbl.config(fg=C["success"] if ev > 0 else C["text_secondary"])
 
+        guard = snap.get("guardrails") or {}
+        if guard.get("breached"):
+            if self.guardrail_banner.cget("text") != guard["text"]:
+                self.guardrail_banner.config(text=guard["text"])
+            if not self.guardrail_banner.winfo_ismapped():
+                self.guardrail_banner.pack(side=tk.RIGHT, padx=(0, 10))
+        else:
+            self.guardrail_banner.pack_forget()
         if (snap.get("anchors") or {}).get("drift"):
             if not self.anchor_badge.winfo_ismapped():
                 self.anchor_badge.pack(side=tk.RIGHT, padx=(0, 10))
