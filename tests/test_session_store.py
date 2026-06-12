@@ -67,6 +67,54 @@ class StoreRoundTrip(unittest.TestCase):
         self.assertIn("10 of Hearts", text)
 
 
+class RampDesignerQueries(unittest.TestCase):
+    """V3 Feature 5: TC distribution + table pace measured from rounds."""
+
+    def setUp(self):
+        self.store = SessionStore(Path(tempfile.mkdtemp()) / "session.db")
+
+    def _insert(self, ts, tc, session_id=None):
+        import sqlite3
+        with sqlite3.connect(self.store.path) as con:
+            con.execute(
+                "INSERT INTO rounds (ts, session_id, true_count) VALUES (?,?,?)",
+                (ts, session_id or self.store.session_id, tc))
+
+    def test_pre_deal_tcs(self):
+        self.store.record_round(snapshot(1, tc=-1.0))
+        self.store.record_round(snapshot(2, tc=2.5))
+        self._insert(time.time(), 4.0, session_id="other-session")
+        self.assertEqual(self.store.pre_deal_tcs(), [-1.0, 2.5, 4.0])
+        self.assertEqual(self.store.pre_deal_tcs(session_only=True),
+                         [-1.0, 2.5])
+
+    def test_rounds_per_hour_gap_aware(self):
+        t0 = 1_000_000.0
+        # 12 rounds at one a minute, then a 2-hour break, then one more.
+        for i in range(12):
+            self._insert(t0 + i * 60.0, 0.0)
+        self._insert(t0 + 11 * 60.0 + 7200.0, 0.0)
+        rph = self.store.rounds_per_hour()
+        self.assertAlmostEqual(rph, 60.0, places=6)  # the gap doesn't count
+
+    def test_rounds_per_hour_needs_data(self):
+        self.assertIsNone(self.store.rounds_per_hour())
+        t0 = 1_000_000.0
+        for i in range(5):
+            self._insert(t0 + i * 60.0, 0.0)
+        self.assertIsNone(self.store.rounds_per_hour())  # < 10 intervals
+
+    def test_sessions_do_not_chain(self):
+        # The interval between the last round of one app run and the first
+        # of the next is dead time, not play time.
+        t0 = 1_000_000.0
+        for i in range(11):
+            self._insert(t0 + i * 30.0, 0.0)
+        self._insert(t0 + 12 * 30.0, 0.0, session_id="other-session")
+        rph = self.store.rounds_per_hour()
+        self.assertAlmostEqual(rph, 120.0, places=6)
+
+
 class ShoeStatePersistence(unittest.TestCase):
     def setUp(self):
         self.store = SessionStore(Path(tempfile.mkdtemp()) / "session.db")

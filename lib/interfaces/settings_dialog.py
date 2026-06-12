@@ -16,6 +16,42 @@ from .validation import attach_numeric_entry
 
 C = constants.COLORS
 
+
+def notebook_style(widget) -> str:
+    """Themed notebook tabs matching the dark dialogs; returns the style
+    name. Like the sidebar scrollbar, the native Windows theme ignores ttk
+    color options, so the tab/client elements come from clam. Style names
+    are interpreter-global — every tabbed window (settings, bankroll)
+    shares this one definition."""
+    style = ttk.Style(widget)
+    for element in ("client", "tab"):
+        try:
+            style.element_create(f"Settings.Notebook.{element}",
+                                 "from", "clam", f"Notebook.{element}")
+        except tk.TclError:
+            pass  # dialog reopened in one interpreter: elements persist
+    style.layout("Settings.TNotebook",
+                 [("Settings.Notebook.client", {"sticky": "nswe"})])
+    style.layout("Settings.TNotebook.Tab", [
+        ("Settings.Notebook.tab", {"sticky": "nswe", "children": [
+            ("Notebook.padding", {"side": "top", "sticky": "nswe",
+                                  "children": [("Notebook.label",
+                                                {"side": "top",
+                                                 "sticky": ""})]})]})])
+    style.configure("Settings.TNotebook", background=C["bg_secondary"],
+                    bordercolor=C["border"], lightcolor=C["bg_secondary"],
+                    darkcolor=C["bg_secondary"], tabmargins=(2, 4, 2, 0))
+    style.configure("Settings.TNotebook.Tab", font=constants.FONT_BODY,
+                    background=C["bg_primary"], foreground=C["text_secondary"],
+                    bordercolor=C["border"], lightcolor=C["bg_primary"],
+                    padding=(scaling.px(14), scaling.px(6)),
+                    focuscolor=C["bg_secondary"])
+    style.map("Settings.TNotebook.Tab",
+              background=[("selected", C["bg_secondary"])],
+              foreground=[("selected", C["text_primary"])])
+    return "Settings.TNotebook"
+
+
 _RULE_FIELDS = [
     # (key, label, kind, options/None, tooltip-ish hint shown after the field)
     ("s17", "Dealer soft 17", "choice", [("Stands (S17)", True), ("Hits (H17)", False)]),
@@ -119,36 +155,7 @@ class SettingsDialog(tk.Toplevel):
     # --------------------------------------------------------------- tabs
 
     def _notebook_style(self):
-        """Themed notebook tabs matching the dialog; returns the style name.
-        Like the sidebar scrollbar, the native Windows theme ignores ttk
-        color options, so the tab/client elements come from clam."""
-        style = ttk.Style(self)
-        for element in ("client", "tab"):
-            try:
-                style.element_create(f"Settings.Notebook.{element}",
-                                     "from", "clam", f"Notebook.{element}")
-            except tk.TclError:
-                pass  # dialog reopened in one interpreter: elements persist
-        style.layout("Settings.TNotebook",
-                     [("Settings.Notebook.client", {"sticky": "nswe"})])
-        style.layout("Settings.TNotebook.Tab", [
-            ("Settings.Notebook.tab", {"sticky": "nswe", "children": [
-                ("Notebook.padding", {"side": "top", "sticky": "nswe",
-                                      "children": [("Notebook.label",
-                                                    {"side": "top",
-                                                     "sticky": ""})]})]})])
-        style.configure("Settings.TNotebook", background=C["bg_secondary"],
-                        bordercolor=C["border"], lightcolor=C["bg_secondary"],
-                        darkcolor=C["bg_secondary"], tabmargins=(2, 4, 2, 0))
-        style.configure("Settings.TNotebook.Tab", font=constants.FONT_BODY,
-                        background=C["bg_primary"], foreground=C["text_secondary"],
-                        bordercolor=C["border"], lightcolor=C["bg_primary"],
-                        padding=(scaling.px(14), scaling.px(6)),
-                        focuscolor=C["bg_secondary"])
-        style.map("Settings.TNotebook.Tab",
-                  background=[("selected", C["bg_secondary"])],
-                  foreground=[("selected", C["text_primary"])])
-        return "Settings.TNotebook"
+        return notebook_style(self)
 
     def _tab(self, notebook, title):
         frame = tk.Frame(notebook, bg=C["bg_secondary"],

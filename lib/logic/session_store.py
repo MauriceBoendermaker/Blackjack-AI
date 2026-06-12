@@ -359,6 +359,40 @@ class SessionStore:
             out.append({"dealer": dealer, "seats": seats, "true_count": tc})
         return out
 
+    def pre_deal_tcs(self, session_only=False):
+        """Every recorded round's true count. The stored count is taken at
+        round END (after the round's own cards), which makes each row the
+        PRE-DEAL count of the round that followed — exactly the between-
+        rounds distribution the ramp designer must weight bets by."""
+        where = ("WHERE true_count IS NOT NULL"
+                 + (" AND session_id = ?" if session_only else ""))
+        args = (self.session_id,) if session_only else ()
+        with self._conn() as con:
+            rows = con.execute(f"SELECT true_count FROM rounds {where}",
+                               args).fetchall()
+        return [r[0] for r in rows]
+
+    def rounds_per_hour(self, session_only=False, max_gap_s=900.0):
+        """Gap-aware measured table pace from round timestamps (idle gaps
+        over max_gap_s don't count as play time). None until 10+ intervals
+        exist — callers fall back to a nominal pace."""
+        where = "WHERE session_id = ?" if session_only else ""
+        args = (self.session_id,) if session_only else ()
+        with self._conn() as con:
+            rows = con.execute(
+                f"SELECT session_id, ts FROM rounds {where} ORDER BY id",
+                args).fetchall()
+        total_s = 0.0
+        intervals = 0
+        for (prev_sid, prev_ts), (sid, ts) in zip(rows, rows[1:]):
+            dt = ts - prev_ts
+            if sid == prev_sid and 0 < dt <= max_gap_s:
+                total_s += dt
+                intervals += 1
+        if intervals < 10 or total_s <= 0:
+            return None
+        return 3600.0 * intervals / total_s
+
     def settled_pnl(self, session_only=False):
         """Per-round EUR results of settled rounds with owned seats — the
         empirical sample the bankroll Monte Carlo resamples."""

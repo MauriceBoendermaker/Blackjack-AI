@@ -1,36 +1,63 @@
-"""Bankroll & Risk window (V2 Feature 2).
+"""Bankroll & Risk window (V2 Feature 2) + Ramp designer (V3 Feature 5).
 
-Shows the risk numbers for the configured ramp and bankroll: lifetime and
-trip risk of ruin, the Kelly-fraction risk table, DI/SCORE/CE, the bankroll
-needed for target risk levels — and a Monte Carlo simulation that resamples
-the user's own recorded rounds when enough exist (falling back to the
-TC-frequency model otherwise).
+Risk tab: the risk numbers for the configured ramp and bankroll — lifetime
+and trip risk of ruin, the Kelly-fraction risk table, DI/SCORE/CE, the
+bankroll needed for target risk levels — and a Monte Carlo simulation that
+resamples the user's own recorded rounds when enough exist (falling back to
+the TC-frequency model otherwise).
+
+Ramp designer tab: solves a personal integer per-TC bet table for a target
+risk of ruin from the TC distribution measured in session.db
+(lib/logic/ramp_optimizer.py), shows current vs optimal side by side, and
+installs the winner into BETTING["bet_table"] — the live ramp follows it
+from the next snapshot on.
 """
 
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
-from ..common import constants
+from ..common import constants, settings
 from ..logic import bankroll as br
+from ..logic import ramp_optimizer
+from .settings_dialog import notebook_style
 from .validation import attach_numeric_entry
 
 C = constants.COLORS
 
+#: Nominal Evolution pace when too few rounds are recorded to measure one.
+FALLBACK_ROUNDS_PER_HOUR = 60.0
+
 
 class BankrollWindow(tk.Toplevel):
-    def __init__(self, parent, store=None):
+    def __init__(self, parent, store=None, engine=None):
         super().__init__(parent)
         self.title("Bankroll & Risk")
-        self.configure(bg=C["bg_secondary"], padx=20, pady=16)
+        self.configure(bg=C["bg_secondary"], padx=12, pady=10)
         self.resizable(False, False)
         self.store = store
+        self.engine = engine
         self._vars = {}
+        self._opt_result = None
+        self._opt_freqs = None
 
-        tk.Label(self, text="Bankroll & Risk", font=constants.FONT_TITLE,
+        notebook = ttk.Notebook(self, style=notebook_style(self))
+        notebook.pack(fill=tk.BOTH, expand=True)
+        risk = tk.Frame(notebook, bg=C["bg_secondary"], padx=12, pady=8)
+        ramp = tk.Frame(notebook, bg=C["bg_secondary"], padx=12, pady=8)
+        notebook.add(risk, text="Risk")
+        notebook.add(ramp, text="Ramp designer")
+        self._build_risk_tab(risk)
+        self._build_ramp_tab(ramp)
+        self.refresh()
+
+    # ------------------------------------------------------------ risk tab
+
+    def _build_risk_tab(self, tab):
+        tk.Label(tab, text="Bankroll & Risk", font=constants.FONT_TITLE,
                  bg=C["bg_secondary"], fg=C["text_primary"]).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
         self.source_var = tk.StringVar(value="")
-        tk.Label(self, textvariable=self.source_var, font=constants.FONT_SMALL,
+        tk.Label(tab, textvariable=self.source_var, font=constants.FONT_SMALL,
                  bg=C["bg_secondary"], fg=C["text_secondary"], wraplength=380,
                  justify="left").grid(row=1, column=0, columnspan=2, sticky="w",
                                       pady=(0, 8))
@@ -45,17 +72,17 @@ class BankrollWindow(tk.Toplevel):
             ("ce", "Certainty equivalent / round"),
         ]
         for i, (key, label) in enumerate(rows, start=2):
-            tk.Label(self, text=label, font=constants.FONT_BODY, anchor="w",
+            tk.Label(tab, text=label, font=constants.FONT_BODY, anchor="w",
                      bg=C["bg_secondary"], fg=C["text_secondary"], width=26
                      ).grid(row=i, column=0, sticky="w", pady=2)
             var = tk.StringVar(value="—")
-            tk.Label(self, textvariable=var, font=constants.FONT_BODY_BOLD,
+            tk.Label(tab, textvariable=var, font=constants.FONT_BODY_BOLD,
                      bg=C["bg_secondary"], fg=C["text_primary"]
                      ).grid(row=i, column=1, sticky="w", padx=(12, 0))
             self._vars[key] = var
 
         row = 2 + len(rows)
-        sim = tk.Frame(self, bg=C["bg_secondary"])
+        sim = tk.Frame(tab, bg=C["bg_secondary"])
         sim.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(12, 2))
         tk.Label(sim, text="Simulate", font=constants.FONT_SECTION,
                  bg=C["bg_secondary"], fg=C["text_primary"]).pack(side=tk.LEFT)
@@ -71,11 +98,10 @@ class BankrollWindow(tk.Toplevel):
                   font=constants.FONT_BODY, cursor="hand2").pack(side=tk.RIGHT)
 
         self.mc_var = tk.StringVar(value="")
-        tk.Label(self, textvariable=self.mc_var, font=constants.FONT_BODY,
+        tk.Label(tab, textvariable=self.mc_var, font=constants.FONT_BODY,
                  bg=C["bg_secondary"], fg=C["text_primary"], justify="left",
                  wraplength=400).grid(row=row + 1, column=0, columnspan=2,
                                       sticky="w", pady=(6, 0))
-        self.refresh()
 
     # ------------------------------------------------------------- data
 
@@ -116,6 +142,7 @@ class BankrollWindow(tk.Toplevel):
         di, score = br.di_score(mu, sigma)
         self._vars["di"].set(f"{di:.2f} / {score:.1f}")
         self._vars["ce"].set(f"€{br.certainty_equivalent(mu, sigma, bank):+.3f}")
+        self._refresh_ramp_status()
 
     def _simulate(self):
         (mu, sigma), outcomes, _ = self._round_stats()
@@ -143,3 +170,216 @@ class BankrollWindow(tk.Toplevel):
             f"€{result['final_p90']:+,.0f} (p90)\n"
             f"Max drawdown: €{result['drawdown_p50']:,.0f} (median) / "
             f"€{result['drawdown_p90']:,.0f} (p90)")
+
+    # ------------------------------------------------------- ramp designer
+
+    def _build_ramp_tab(self, tab):
+        tk.Label(tab, text="Ramp designer", font=constants.FONT_TITLE,
+                 bg=C["bg_secondary"], fg=C["text_primary"]).grid(
+            row=0, column=0, columnspan=4, sticky="w", pady=(0, 4))
+        self.ramp_status_var = tk.StringVar(value="")
+        tk.Label(tab, textvariable=self.ramp_status_var,
+                 font=constants.FONT_SMALL, bg=C["bg_secondary"],
+                 fg=C["text_secondary"], wraplength=420, justify="left").grid(
+            row=1, column=0, columnspan=4, sticky="w", pady=(0, 8))
+
+        def spin(col, label, var, lo, hi, step, integer=False, fmt=None):
+            tk.Label(tab, text=label, font=constants.FONT_BODY,
+                     bg=C["bg_secondary"], fg=C["text_secondary"]).grid(
+                row=2, column=col, sticky="w", padx=(0 if col == 0 else 10, 0))
+            box = tk.Spinbox(tab, from_=lo, to=hi, increment=step,
+                             textvariable=var, width=6,
+                             **({"format": fmt} if fmt else {}))
+            box.grid(row=3, column=col, sticky="w",
+                     padx=(0 if col == 0 else 10, 0))
+            attach_numeric_entry(box, integer=integer)
+
+        self.target_ror_var = tk.DoubleVar(value=5.0)
+        self.chip_var = tk.DoubleVar(value=5.0)
+        self.spread_var = tk.IntVar(value=20)
+        spin(0, "Target RoR %", self.target_ror_var, 0.1, 50.0, 0.1,
+             fmt="%.1f")
+        spin(1, "Chip step €", self.chip_var, 0.5, 1000.0, 0.5, fmt="%.1f")
+        spin(2, "Max spread 1:n", self.spread_var, 1, 200, 1, integer=True)
+        self.sit_out_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(tab, text="Sit out at ≤0 edge", variable=self.sit_out_var,
+                       bg=C["bg_secondary"], fg=C["text_secondary"],
+                       selectcolor=C["bg_primary"], font=constants.FONT_BODY,
+                       activebackground=C["bg_secondary"]).grid(
+            row=3, column=3, sticky="w", padx=(12, 0))
+
+        tk.Button(tab, text="Optimize", command=self._optimize,
+                  bg=C["accent"], fg="white", relief="flat", padx=14, pady=6,
+                  font=constants.FONT_BODY, cursor="hand2").grid(
+            row=4, column=0, sticky="w", pady=(10, 6))
+        self.freq_source_var = tk.StringVar(value="")
+        tk.Label(tab, textvariable=self.freq_source_var,
+                 font=constants.FONT_SMALL, bg=C["bg_secondary"],
+                 fg=C["text_secondary"], wraplength=300, justify="left").grid(
+            row=4, column=1, columnspan=3, sticky="w", pady=(10, 6),
+            padx=(10, 0))
+
+        self.result_frame = tk.Frame(tab, bg=C["bg_secondary"])
+        self.result_frame.grid(row=5, column=0, columnspan=4, sticky="nsew")
+
+        buttons = tk.Frame(tab, bg=C["bg_secondary"])
+        buttons.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(10, 0))
+        self.apply_btn = tk.Button(buttons, text="Apply optimal ramp",
+                                   command=self._apply_ramp, state=tk.DISABLED,
+                                   bg=C["accent"], fg="white", relief="flat",
+                                   padx=14, pady=6, font=constants.FONT_BODY,
+                                   cursor="hand2")
+        self.apply_btn.pack(side=tk.LEFT)
+        tk.Button(buttons, text="Clear installed ramp",
+                  command=self._clear_ramp, bg=C["bg_primary"],
+                  fg=C["text_primary"], relief="flat", padx=14, pady=6,
+                  font=constants.FONT_BODY, cursor="hand2").pack(
+            side=tk.LEFT, padx=(8, 0))
+        self._refresh_ramp_status()
+
+    def _refresh_ramp_status(self):
+        table = ramp_optimizer.from_bet_table(
+            constants.BETTING.get("bet_table"))
+        if table:
+            lo, hi = min(table), max(table)
+            self.ramp_status_var.set(
+                f"Live ramp: per-TC bet table installed "
+                f"({len(table)} buckets, TC {lo:+d}…{hi:+d}). The formula "
+                "is overridden until cleared.")
+        else:
+            self.ramp_status_var.set(
+                "Live ramp: fractional-Kelly formula (no bet table "
+                "installed). Optimize and apply to follow a solved integer "
+                "ramp instead.")
+
+    def _rounds_per_hour(self):
+        if self.store is not None:
+            try:
+                measured = self.store.rounds_per_hour()
+            except Exception:
+                measured = None
+            if measured:
+                return measured, f"{measured:.0f} rounds/h measured"
+        return (FALLBACK_ROUNDS_PER_HOUR,
+                f"{FALLBACK_ROUNDS_PER_HOUR:.0f} rounds/h nominal")
+
+    def _optimize(self):
+        try:
+            target = max(0.001, min(0.5, float(self.target_ror_var.get()) / 100.0))
+            chip = max(0.01, float(self.chip_var.get()))
+            spread = max(1, int(self.spread_var.get()))
+        except tk.TclError:
+            messagebox.showerror("Ramp designer",
+                                 "Fill in target RoR, chip step and spread.",
+                                 parent=self)
+            return
+        freqs, freq_label = ramp_optimizer.frequency_source(self.store)
+        rph, rph_label = self._rounds_per_hour()
+        self.freq_source_var.set(f"TC distribution {freq_label} · {rph_label}")
+        result = ramp_optimizer.optimize(
+            constants.BETTING, freqs, target_ror=target, chip_step=chip,
+            max_spread=spread, sit_out_negative=bool(self.sit_out_var.get()),
+            rounds_per_hour=rph)
+        self._opt_result = result
+        self._opt_freqs = freqs
+        self._render_result(result, freqs, rph)
+        self.apply_btn.config(state=tk.NORMAL if result["feasible"]
+                              else tk.DISABLED)
+
+    def _render_result(self, result, freqs, rph):
+        for child in self.result_frame.winfo_children():
+            child.destroy()
+        current = ramp_optimizer.formula_ramp()
+        cur_m = ramp_optimizer.ramp_metrics(current, freqs,
+                                            rounds_per_hour=rph)
+        opt_m = result["metrics"]
+
+        def cell(row, col, text, bold=False, fg=None, pad=(0, 8)):
+            tk.Label(self.result_frame, text=text,
+                     font=constants.FONT_BODY_BOLD if bold else constants.FONT_SMALL,
+                     bg=C["bg_secondary"],
+                     fg=fg or (C["text_primary"] if bold else C["text_secondary"])
+                     ).grid(row=row, column=col, sticky="e", padx=pad)
+
+        cell(0, 0, "TC", bold=True)
+        cell(0, 1, "freq", bold=True)
+        cell(0, 2, "current €", bold=True)
+        cell(0, 3, "optimal €", bold=True)
+        for i, tc in enumerate(sorted(result["ramp"]), start=1):
+            opt = result["ramp"][tc]
+            cell(i, 0, f"{tc:+d}")
+            cell(i, 1, f"{freqs.get(tc, 0.0) * 100:.1f}%")
+            cell(i, 2, f"{current.get(tc, 0.0):g}")
+            cell(i, 3, "sit out" if opt <= 0 else f"{opt:g}", bold=True,
+                 fg=C["accent"])
+
+        def metric_rows(col_base):
+            rows = [
+                ("EV / round", lambda m: f"€{m['mu']:+.3f}"),
+                ("EV / hour", lambda m: f"€{m['ev_hr']:+.2f}"),
+                ("Lifetime RoR", lambda m: f"{m['ror'] * 100:.2f}%"),
+                ("N0 (rounds)", lambda m: ("—" if m["n0"] is None
+                                           else f"{m['n0']:,.0f}")),
+                ("DI / SCORE", lambda m: f"{m['di']:.2f} / {m['score']:.1f}"),
+                ("CE / round", lambda m: f"€{m['ce']:+.3f}"),
+            ]
+            cell(0, col_base + 1, "current", bold=True)
+            cell(0, col_base + 2, "optimal", bold=True)
+            for i, (label, fmt) in enumerate(rows, start=1):
+                cell(i, col_base, label)
+                cell(i, col_base + 1, fmt(cur_m))
+                cell(i, col_base + 2, fmt(opt_m), bold=True, fg=C["accent"])
+            return len(rows)
+
+        n = metric_rows(5)
+        verdict_row = max(n, len(result["ramp"])) + 1
+        if not result["feasible"]:
+            verdict = ("No ramp meets that RoR target at this table minimum "
+                       "and bankroll — showing the lowest-ruin candidate "
+                       f"({opt_m['ror'] * 100:.1f}%). Lower the target, the "
+                       "table min, or grow the bankroll.")
+        else:
+            mc = br.monte_carlo(
+                ramp_optimizer.synth_outcomes(result["ramp"], freqs),
+                constants.BETTING["bankroll"], n_rounds=5000, trials=4000)
+            verdict = (f"Scanned {result['evaluated']} candidates · MC check "
+                       f"(5k rounds): ruin {mc['ruin'] * 100:.1f}%, "
+                       f"P(profit) {mc['p_profit'] * 100:.0f}%, median "
+                       f"€{mc['final_p50']:+,.0f}" if mc else
+                       f"Scanned {result['evaluated']} candidates")
+        tk.Label(self.result_frame, text=verdict, font=constants.FONT_SMALL,
+                 bg=C["bg_secondary"], fg=C["text_secondary"], wraplength=430,
+                 justify="left").grid(row=verdict_row, column=0, columnspan=8,
+                                      sticky="w", pady=(8, 0))
+
+    def _persist_betting(self):
+        """Write BETTING (with the new table) to settings.json — through the
+        engine's io thread when available, inline otherwise."""
+        if self.engine is not None:
+            try:
+                self.engine.persist_settings_async()
+                self.engine.publish_snapshot()
+                return
+            except Exception:
+                pass
+        settings.save()
+
+    def _apply_ramp(self):
+        if not self._opt_result or not self._opt_result["feasible"]:
+            return
+        constants.BETTING["bet_table"] = ramp_optimizer.to_bet_table(
+            self._opt_result["ramp"])
+        self._persist_betting()
+        self.refresh()
+        messagebox.showinfo(
+            "Ramp designer",
+            "Ramp installed — the live bet call now follows the per-TC "
+            "table. Clear it here to return to the formula.", parent=self)
+
+    def _clear_ramp(self):
+        if not ramp_optimizer.from_bet_table(constants.BETTING.get("bet_table")):
+            self._refresh_ramp_status()
+            return
+        constants.BETTING["bet_table"] = {}
+        self._persist_betting()
+        self.refresh()

@@ -9,7 +9,13 @@ gives up little growth for far less ruin risk. Blackjack hand variance is
 ~1.3 units^2 (doubles/splits/naturals included).
 
 All knobs live in constants.BETTING and persist with the table profile.
+
+When the ramp designer (lib/logic/ramp_optimizer.py) has installed a per-TC
+bet table (BETTING["bet_table"], {str(floored_tc): bet_eur}), suggest()
+follows the table instead of the formula — a 0 entry means sit out.
 """
+
+import math
 
 from ..common import constants
 
@@ -19,17 +25,54 @@ def estimate_edge(true_count, betting=None) -> float:
     return b["base_edge"] + b["edge_per_tc"] * true_count
 
 
+def ramp_bet(true_count, betting=None):
+    """(floored_tc, bet) from the installed per-TC bet table, clamping
+    out-of-range counts to the edge buckets; None when no table is set
+    (the formula path applies) or the table is unreadable."""
+    b = betting or constants.BETTING
+    table = b.get("bet_table")
+    if not isinstance(table, dict) or not table:
+        return None
+    buckets = {}
+    for key, val in table.items():
+        try:
+            buckets[int(key)] = max(0.0, float(val))
+        except (TypeError, ValueError):
+            continue
+    if not buckets:
+        return None
+    tc = int(math.floor(true_count))
+    tc = max(min(buckets), min(max(buckets), tc))
+    return tc, buckets[tc]
+
+
 def suggest(true_count, betting=None, exact_edge=None) -> dict:
     """{"edge", "bet", "sit_out", "text", "capped"} for the current count.
     When the exact pre-deal EV is available (V2 Feature 3) it replaces the
     linear true-count estimate — the text says which one it used. "capped"
-    is True iff the Kelly wager was clamped DOWN by the table max."""
+    is True iff the Kelly wager was clamped DOWN by the table max.
+    An installed bet_table (ramp designer) overrides the formula: the bet
+    comes from the floored-TC bucket, 0 = sit out (bet 0.0)."""
     b = betting or constants.BETTING
     exact = exact_edge is not None
     edge = exact_edge if exact else estimate_edge(true_count, b)
     tag = "exact" if exact else "TC est."
     table_min = max(1.0, float(b["table_min"]))
     table_max = float(b["table_max"]) if b["table_max"] else float("inf")
+
+    ramp = ramp_bet(true_count, b)
+    if ramp is not None:
+        tc_bucket, table_bet = ramp
+        if table_bet <= 0:
+            return {"edge": edge, "bet": 0.0, "sit_out": True,
+                    "text": (f"Sit out (ramp TC {tc_bucket:+d}) — "
+                             f"edge {edge:+.2%} ({tag})"),
+                    "capped": False}
+        bet = round(min(max(table_bet, table_min), table_max))
+        return {"edge": edge, "bet": float(bet), "sit_out": False,
+                "text": (f"Bet €{bet:g} (ramp TC {tc_bucket:+d}; "
+                         f"edge {edge:+.2%} {tag})"),
+                "capped": table_bet > table_max}
 
     if edge <= 0:
         sit_out = edge < b["base_edge"]  # worse than off-the-top: count is negative

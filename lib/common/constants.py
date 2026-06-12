@@ -173,6 +173,9 @@ BETTING = {
     "table_max": 5000,       # 0 = no max
     "auto_bankroll": 1,      # settle owned seats into the bankroll (1/0)
     "use_exact_edge": 1,     # exact pre-deal EV instead of the linear TC model
+    # Per-TC bet table installed by the ramp designer (V3 Feature 5):
+    # {str(floored_tc): bet_eur}, 0 = sit out. Empty = formula ramp.
+    "bet_table": {},
 }
 
 # Casino-UI OCR (balance / bet / result banner). Needs winocr (Windows) and

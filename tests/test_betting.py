@@ -53,6 +53,42 @@ class KellySizing(unittest.TestCase):
         self.assertIn("-EV", betting.bet_behind_hint(0, BASE))
 
 
+class RampTable(unittest.TestCase):
+    """V3 Feature 5: an installed per-TC bet table overrides the formula."""
+
+    TABLE = {"-1": 0.0, "0": 10.0, "2": 50.0, "4": 200.0}
+
+    def test_follows_floored_tc_bucket(self):
+        c = cfg(bet_table=self.TABLE)
+        self.assertEqual(betting.suggest(2.7, c)["bet"], 50.0)
+        self.assertEqual(betting.suggest(0.4, c)["bet"], 10.0)
+        self.assertIn("ramp TC +2", betting.suggest(2.7, c)["text"])
+
+    def test_clamps_out_of_range_counts_to_edge_buckets(self):
+        c = cfg(bet_table=self.TABLE)
+        self.assertEqual(betting.suggest(9.0, c)["bet"], 200.0)
+        s = betting.suggest(-6.0, c)
+        self.assertEqual(s["bet"], 0.0)
+
+    def test_zero_means_sit_out(self):
+        s = betting.suggest(-1.0, cfg(bet_table=self.TABLE))
+        self.assertTrue(s["sit_out"])
+        self.assertEqual(s["bet"], 0.0)
+        self.assertIn("Sit out", s["text"])
+
+    def test_table_limits_still_clamp(self):
+        s = betting.suggest(4.0, cfg(bet_table=self.TABLE, table_max=100))
+        self.assertEqual(s["bet"], 100.0)
+        self.assertTrue(s["capped"])
+        s = betting.suggest(0.0, cfg(bet_table=self.TABLE, table_min=25))
+        self.assertEqual(s["bet"], 25.0)
+
+    def test_junk_or_missing_table_uses_formula(self):
+        for table in (None, {}, "junk", {"x": "y"}):
+            s = betting.suggest(3, cfg(bet_table=table, bankroll=100_000))
+            self.assertAlmostEqual(s["bet"], 376, delta=1)
+
+
 class SettingsIntegration(unittest.TestCase):
     def test_betting_persists_via_settings(self):
         from lib.common import constants, settings
@@ -64,6 +100,26 @@ class SettingsIntegration(unittest.TestCase):
             self.assertEqual(constants.BETTING["kelly_fraction"], 0.25)
             self.assertNotIn("junk", constants.BETTING)
             self.assertEqual(settings.snapshot()["betting"]["bankroll"], 2500)
+        finally:
+            settings.apply(before)
+
+    def test_bet_table_round_trips_and_filters_junk(self):
+        from lib.common import constants, settings
+        before = settings.snapshot()
+        try:
+            settings.apply({"betting": {"bet_table": {
+                "0": 10, "3": 75.0, "bad": 5, "2": "junk", "99": 10}}})
+            self.assertEqual(constants.BETTING["bet_table"],
+                             {"0": 10.0, "3": 75.0})
+            self.assertEqual(settings.snapshot()["betting"]["bet_table"],
+                             {"0": 10.0, "3": 75.0})
+            # A profile saved without the key must not wipe a live table.
+            settings.apply({"betting": {"bankroll": 500}})
+            self.assertEqual(constants.BETTING["bet_table"],
+                             {"0": 10.0, "3": 75.0})
+            # Non-dict junk clears it instead of crashing.
+            settings.apply({"betting": {"bet_table": "garbage"}})
+            self.assertEqual(constants.BETTING["bet_table"], {})
         finally:
             settings.apply(before)
 

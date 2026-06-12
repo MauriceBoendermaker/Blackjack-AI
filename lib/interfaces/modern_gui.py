@@ -1051,7 +1051,8 @@ class ModernBlackjackGUI(tk.Tk):
 
     def _open_bankroll(self):
         from .bankroll_window import BankrollWindow
-        BankrollWindow(self, self.controller.engine.store)
+        BankrollWindow(self, self.controller.engine.store,
+                       engine=self.controller.engine)
 
     def _toggle_hud(self):
         hud = getattr(self, "hud", None)

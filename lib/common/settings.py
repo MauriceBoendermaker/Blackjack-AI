@@ -71,11 +71,25 @@ def apply(data: dict):
         constants.BASE_BET = max(1, float(data["base_bet"]))
     betting = data.get("betting", {})
     for key in constants.BETTING:
-        if key in betting:
-            try:
-                constants.BETTING[key] = float(betting[key])
-            except (TypeError, ValueError):
-                pass
+        if key == "bet_table" or key not in betting:
+            continue
+        try:
+            constants.BETTING[key] = float(betting[key])
+        except (TypeError, ValueError):
+            pass
+    if "bet_table" in betting:
+        # Ramp-designer table: {str(floored_tc): bet_eur}; junk entries are
+        # dropped rather than poisoning the whole table.
+        table = {}
+        if isinstance(betting["bet_table"], dict):
+            for key, val in betting["bet_table"].items():
+                try:
+                    tc, bet = int(key), float(val)
+                except (TypeError, ValueError):
+                    continue
+                if -20 <= tc <= 20 and 0.0 <= bet <= 1_000_000.0:
+                    table[str(tc)] = bet
+        constants.BETTING["bet_table"] = table
     for key, cfg in data.get("side_bets", {}).items():
         if key not in constants.SIDE_BETS:
             continue

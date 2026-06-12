@@ -161,7 +161,13 @@ workers. Results window reuses the bankroll-window layout + a fan chart.
 
 **Effort:** ~4–6 days. Synergy: Feature 5 consumes its output directly.
 
-## 5. Bet-ramp designer / optimizer
+## 5. ✅ Bet-ramp designer / optimizer — COMPLETED
+
+**Status: DONE** — `lib/logic/ramp_optimizer.py` (Kelly-scale scan +
+hill-climb under closed-form RoR), per-TC `BETTING["bet_table"]` followed by
+`betting.suggest()` (0 = sit out), measured TC distribution + table pace via
+`SessionStore.pre_deal_tcs()`/`rounds_per_hour()`, "Ramp designer" tab in the
+bankroll window with current-vs-optimal metrics and one-click install/clear.
 
 **What:** Today `betting.py` sizes each bet from a formula (bankroll ×
 Kelly-fraction × edge/variance, clamped). The designer turns that into a
