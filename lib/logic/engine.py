@@ -91,9 +91,10 @@ class DetectionEngine:
         self.dealer_locked = False
         self._dealer_counted = False
         self._dealer_history = deque(maxlen=4)
+        self._dealer_miss_streak = 0  # empty dealer frames since a sighting
         self._dealer_pos = None          # up-card (cx, cy) in dealer-crop coords
         self.dealer_extras = []          # playout cards: dicts rank, cx, cy
-        self._pending_dealer = {}        # (rank, qx, qy) -> consecutive sightings
+        self._pending_dealer = {}  # (rank, qx, qy) -> (hits, misses, cx, cy)
         self.round_number = 1
         self.cutting_card_seen = False
         self._pending_cutting_card = {}  # (qx, qy) -> consecutive sightings
@@ -127,6 +128,7 @@ class DetectionEngine:
         self._pool = ThreadPoolExecutor(max_workers=2)
         self._pending_extra = {}   # (seat_idx, name, qx, qy) -> consecutive sightings
         self._prev_thumb = None
+        self._prev_dealer_thumb = None
         self._skipped_cycles = 0
         self._empty_frames = 0     # consecutive inference frames with zero detections
         self._dealer_empty_frames = 0  # consecutive dealer-area frames with no cards
@@ -349,10 +351,31 @@ class DetectionEngine:
         thumb = cv2.cvtColor(cv2.resize(frame, (96, 54), interpolation=cv2.INTER_AREA),
                              cv2.COLOR_BGR2GRAY)
         prev, self._prev_thumb = self._prev_thumb, thumb
+        # The whole-frame diff is blind to small local changes: one card
+        # flipping in the dealer area moves the global 96x54 mean by
+        # ~0.07 — far below the threshold — so a quiet table could skip
+        # straight past the dealer's reveal and playout draws. The dealer
+        # area gets its own thumbnail diff.
+        dealer_thumb = None
+        if self._dealer_rect is not None:
+            left, top, right, bottom = self._dealer_rect
+            crop = frame[top:bottom, left:right]
+            if crop.size:
+                dealer_thumb = cv2.cvtColor(
+                    cv2.resize(crop, (48, 27), interpolation=cv2.INTER_AREA),
+                    cv2.COLOR_BGR2GRAY)
+        dealer_prev = self._prev_dealer_thumb
+        self._prev_dealer_thumb = dealer_thumb
         if prev is None:
             return False
         diff = float(cv2.absdiff(thumb, prev).mean())
-        if diff < constants.FRAME_DIFF_THRESHOLD and self._skipped_cycles < constants.MAX_SKIPPED_CYCLES:
+        dealer_changed = (
+            dealer_thumb is not None and dealer_prev is not None
+            and dealer_thumb.shape == dealer_prev.shape
+            and float(cv2.absdiff(dealer_thumb, dealer_prev).mean())
+            >= constants.DEALER_FRAME_DIFF_THRESHOLD)
+        if (diff < constants.FRAME_DIFF_THRESHOLD and not dealer_changed
+                and self._skipped_cycles < constants.MAX_SKIPPED_CYCLES):
             self._skipped_cycles += 1
             return True
         self._skipped_cycles = 0
@@ -364,45 +387,41 @@ class DetectionEngine:
             self.provider.players_model().predict, frame,
             constants.PREDICTION_CONFIDENCE_PLAYERS, constants.PREDICTION_OVERLAP_PLAYERS)
 
+        self._last_frame = frame  # retained for training-data crops
+        left, top, right, bottom = self._dealer_rect
+
+        player_preds = players_future.result()
         # The dealer area is watched for the whole round: before the lock to
         # find the up-card, after it to count the dealer's playout cards —
         # otherwise the shoe composition silently drifts every round.
-        self._last_frame = frame  # retained for training-data crops
-        left, top, right, bottom = self._dealer_rect
-        crop = frame[top:bottom, left:right]
-        if constants.DEALER_USE_PLAYER_MODEL:
-            # Suit-aware dealer detection via the 52-class player model.
-            dealer_future = self._pool.submit(
-                self.provider.players_model().predict, crop,
-                constants.PREDICTION_CONFIDENCE_PLAYERS,
-                constants.PREDICTION_OVERLAP_PLAYERS)
-        else:
-            dealer_future = self._pool.submit(
-                self.provider.dealer_model().predict, crop,
-                constants.PREDICTION_CONFIDENCE_DEALER,
-                constants.PREDICTION_OVERLAP_DEALER)
-
-        player_preds = players_future.result()
-        dealer_preds = dealer_future.result()
-        cc_checked = True  # the rank model reports the cutting card every frame
-        if constants.DEALER_USE_PLAYER_MODEL:
-            # The cutting card only exists in the rank model — poll it cheaply
-            # every Nth cycle, but EVERY cycle once a sighting is pending so
-            # the confirmation run is not stretched across poll gaps.
-            self._cc_cycle += 1
-            cc_checked = False
-            if (not self.cutting_card_seen
-                    and (self._pending_cutting_card
-                         or self._cc_cycle % constants.CUTTING_CARD_CHECK_EVERY == 0)):
-                try:
-                    cc_preds = self.provider.dealer_model().predict(
-                        crop, constants.PREDICTION_CONFIDENCE_DEALER,
-                        constants.PREDICTION_OVERLAP_DEALER)
-                    dealer_preds = dealer_preds + [
-                        p for p in cc_preds if p["class"] == CUTTING_CARD_CLASS]
-                    cc_checked = True
-                except ModelError:
-                    pass
+        # ONE model, ONE input: the dealer's cards come from the same
+        # full-frame player-model pass the seats use — exactly what the
+        # region preview draws. The old dedicated path (a different model
+        # on a small dealer crop) routinely missed cards the preview
+        # clearly boxed, which made it undiagnosable from the UI.
+        dealer_preds = [p for p in player_preds
+                        if left <= p["cx"] < right and top <= p["cy"] < bottom]
+        # The cutting card only exists in the rank model — poll it on the
+        # dealer crop every Nth cycle, but EVERY cycle once a sighting is
+        # pending so the confirmation run is not stretched across poll gaps.
+        self._cc_cycle += 1
+        cc_checked = False
+        if (not self.cutting_card_seen
+                and (self._pending_cutting_card
+                     or self._cc_cycle % constants.CUTTING_CARD_CHECK_EVERY == 0)):
+            try:
+                cc_preds = self.provider.dealer_model().predict(
+                    frame[top:bottom, left:right],
+                    constants.PREDICTION_CONFIDENCE_DEALER,
+                    constants.PREDICTION_OVERLAP_DEALER)
+                # Crop-local -> frame coords: every dealer-pipeline position
+                # lives in one coordinate space.
+                dealer_preds = dealer_preds + [
+                    p | {"cx": p["cx"] + left, "cy": p["cy"] + top}
+                    for p in cc_preds if p["class"] == CUTTING_CARD_CLASS]
+                cc_checked = True
+            except ModelError:
+                pass
         self._metrics["inference_ms"] = (time.perf_counter() - t0) * 1000.0
         self.last_error = None
 
@@ -443,10 +462,18 @@ class DetectionEngine:
 
         best = max(cards_seen, key=lambda p: p["confidence"], default=None)
         if best is None:
-            # A frame with no dealer card breaks the consecutive-agreement run;
-            # without this, an old transient misread could pair with a later one.
-            self._dealer_history.clear()
+            # Tolerate brief occlusion — the dealer's hands cross the cards
+            # constantly, and a hard clear on every single miss made the
+            # consecutive-agreement rule nearly unreachable on a busy
+            # table (the up-card "never updated"). Only a sustained empty
+            # run clears the streak: the same decay rule playout cards
+            # get, so an old transient misread still can't pair with a
+            # later one across a real gap.
+            self._dealer_miss_streak += 1
+            if self._dealer_miss_streak > constants.DEALER_PENDING_MISS_TOLERANCE:
+                self._dealer_history.clear()
             return
+        self._dealer_miss_streak = 0
         self._dealer_history.append(best["rank"])
         recent = list(self._dealer_history)[-constants.DEALER_CONFIRM_FRAMES:]
         if len(recent) == constants.DEALER_CONFIRM_FRAMES and len(set(recent)) == 1:
@@ -480,13 +507,26 @@ class DetectionEngine:
         fast playouts lose cards. A pending draw survives
         DEALER_PENDING_MISS_TOLERANCE missed cycles before it is dropped."""
         limit_same = constants.SAME_CARD_DISTANCE_PX * self._dist_scale
+        limit_merge = 30 * self._dist_scale
         seen_pending = set()
         for p in cards_seen:
             if self._matches_dealer_card(p, limit_same):
                 continue
             key = (p["rank"], round(p["cx"] / 50.0), round(p["cy"] / 50.0))
+            if key not in self._pending_dealer:
+                # A detection box wobbling across a quantization boundary
+                # must keep feeding the SAME pending entry — split entries
+                # each restart the confirmation count and a fast playout
+                # card never accumulates its two hits.
+                for k, (_, _, kx, ky) in self._pending_dealer.items():
+                    if k[0] != p["rank"] or kx is None:
+                        continue
+                    dx, dy = kx - p["cx"], ky - p["cy"]
+                    if dx * dx + dy * dy < limit_merge * limit_merge:
+                        key = k
+                        break
             seen_pending.add(key)
-            hits, _ = self._pending_dealer.get(key, (0, 0))
+            hits, _, _, _ = self._pending_dealer.get(key, (0, 0, None, None))
             hits += 1
             if hits >= constants.EXTRA_CARD_CONFIRM_CYCLES:
                 self.dealer_extras.append({"rank": p["rank"], "cx": p["cx"], "cy": p["cy"]})
@@ -494,19 +534,27 @@ class DetectionEngine:
                 self._pending_dealer.pop(key, None)
                 self.log(f"Dealer draws: {p['rank']}")
             else:
-                self._pending_dealer[key] = (hits, 0)  # a sighting resets misses
+                # A sighting resets misses and refreshes the position.
+                self._pending_dealer[key] = (hits, 0, p["cx"], p["cy"])
         for key in [k for k in self._pending_dealer if k not in seen_pending]:
-            hits, misses = self._pending_dealer[key]
+            hits, misses, kx, ky = self._pending_dealer[key]
             if misses + 1 > constants.DEALER_PENDING_MISS_TOLERANCE:
                 del self._pending_dealer[key]
             else:
-                self._pending_dealer[key] = (hits, misses + 1)
+                self._pending_dealer[key] = (hits, misses + 1, kx, ky)
 
     def _matches_dealer_card(self, pred, limit_same):
         """Is this detection the up-card or an already-counted playout card?
         Up-card comparison is by rank — a manual full-name correction must
-        still match rank-only detections (and vice versa in suit mode)."""
-        limit_flicker = limit_same * 0.4
+        still match rank-only detections (and vice versa in suit mode).
+
+        The flicker radius (same spot, different class = misread) is kept
+        TIGHT: Evolution fans the playout cards right next to the up-card
+        — at the old 0.4x radius a genuinely new draw landing ~30 px away
+        was systematically swallowed as 'flicker' and the dealer's second
+        and later cards never registered. A real misread of the same
+        physical card wobbles by only a few pixels."""
+        limit_flicker = limit_same * 0.2
         if (self.dealer_card
                 and cards.rank_of(pred["rank"]) == cards.rank_of(self.dealer_card)):
             if self._dealer_pos is None:
@@ -759,6 +807,7 @@ class DetectionEngine:
             seat.split = False
         self._pending_extra.clear()
         self._dealer_history.clear()
+        self._dealer_miss_streak = 0
         self._pending_dealer.clear()
         self.dealer_extras = []   # counted cards stay counted; list just resets
         self._dealer_pos = None

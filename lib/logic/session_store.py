@@ -239,7 +239,9 @@ class SessionStore:
         with self._conn() as con:
             row = con.execute(
                 f"SELECT COUNT(*), AVG(true_count), MAX(true_count), MIN(true_count),"
-                f" SUM(true_count >= 2), SUM(dealer_card = 'Ace')"
+                # LIKE, not =: suit-aware dealer detection stores full names
+                # ('Ace of Spades'), and manual corrections always did.
+                f" SUM(true_count >= 2), SUM(dealer_card LIKE 'Ace%')"
                 f" FROM rounds {where}", args).fetchone()
             insurance_takes = con.execute(
                 f"SELECT COUNT(*) FROM rounds {where}{' AND' if where else ' WHERE'}"

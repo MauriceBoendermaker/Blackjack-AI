@@ -221,9 +221,10 @@ class SettingsDialog(tk.Toplevel):
                          int(constants.SNAPSHOT_POLL_MS))
 
         row = self._heading(tab, row, "Detection & advice")
-        row = self._field(tab, row, "app:DEALER_USE_PLAYER_MODEL",
-                          "Dealer detection reads suits (52-class card model)",
-                          "bool", None, bool(constants.DEALER_USE_PLAYER_MODEL))
+        # DEALER_USE_PLAYER_MODEL is gone from the dialog on purpose: dealer
+        # cards now always come from the same full-frame player-model pass
+        # the preview draws (the old crop path missed cards); the constant
+        # is still accepted from persisted settings files.
         row = self._spin(tab, row, "app:EMPTY_FRAMES_FOR_RESET",
                          "Auto new-round after N empty frames", 3, 10,
                          int(constants.EMPTY_FRAMES_FOR_RESET))

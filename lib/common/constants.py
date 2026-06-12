@@ -47,12 +47,12 @@ PREDICTION_OVERLAP_DEALER = 45
 # (predictions are scaled back). Big upload-time win, negligible accuracy loss.
 API_UPLOAD_MAX_WIDTH = 1280
 
-# Run the 52-class (suit-aware) player model on the dealer crop instead of the
-# rank-only dealer model. Gives dealer suits to the composition AND decides
-# the suited/flush tiers of the 3-card side bets; toggleable live from the
-# settings App tab if its accuracy on dealer-area imagery disappoints. The
-# cutting card only exists in the rank model, so it is still checked every
-# Nth cycle.
+# LEGACY (kept so persisted settings files keep loading): dealer cards now
+# always come from the full-frame player-model pass the seats use — the
+# same detections the region preview draws. The old toggle chose a
+# dedicated dealer-crop inference (rank model when off) that routinely
+# missed cards the preview clearly boxed. The rank model is still polled
+# for the cutting card, which only exists there.
 DEALER_USE_PLAYER_MODEL = True
 CUTTING_CARD_CHECK_EVERY = 5
 # Cutting-card sightings on consecutive checked frames (position-quantized,
@@ -110,6 +110,12 @@ HEALTH_CHECK_BACKOFF_BASE = 0.5
 # Mean absolute pixel difference (0-255 scale, on a small grayscale thumbnail)
 # below which the frame is considered unchanged and inference is skipped.
 FRAME_DIFF_THRESHOLD = 2.0
+# The dealer area gets its OWN thumbnail diff: one card flipping there moves
+# the whole-frame mean by ~0.07 — invisible to the global threshold — and a
+# quiet table would skip straight past the dealer's reveal/playout. Higher
+# than the global value because the crop is small: a real flip moves its
+# mean by 10+, stream compression shimmer stays in low single digits.
+DEALER_FRAME_DIFF_THRESHOLD = 3.0
 # Never skip more than this many consecutive cycles, even if the frame looks static.
 MAX_SKIPPED_CYCLES = 8
 
