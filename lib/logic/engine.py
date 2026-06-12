@@ -1374,11 +1374,23 @@ class DetectionEngine:
     def _predeal_job(self, sig, per_rank):
         try:
             comp = ev_engine.comp_from_per_rank(per_rank, self.counter.deck_count)
-            # The sweep is seconds of pure Python — run it in its own
-            # worker process so it can't contend with the Tk thread's GIL.
-            edge = (ev_offload.run("predeal", ev_engine.predeal_ev, comp,
-                                   ev_engine.current_rules())
-                    if sum(comp) >= 52 else None)
+            # The sweep is seconds of pure Python — fan weight-balanced
+            # up-card/hand slices across the predeal worker processes
+            # (V3 E2) so the exact bet call lands inside the betting
+            # window instead of one round late, and nothing contends with
+            # the Tk thread's GIL. Slicing trades away some memo sharing;
+            # the worker count must beat that, hence the sized pool.
+            if sum(comp) >= 52:
+                rules = ev_engine.current_rules()
+                jobs = ev_engine.predeal_jobs(
+                    comp, max(1, int(constants.PREDEAL_WORKERS)))
+                parts = ev_offload.run_many(
+                    "predeal", ev_engine.predeal_ev_upcards,
+                    [(comp, rules, upcards, slice_of)
+                     for upcards, slice_of in jobs])
+                edge = sum(parts)
+            else:
+                edge = None
         except Exception as e:
             edge = None
             self._log_ev_error(("predeal", sig),

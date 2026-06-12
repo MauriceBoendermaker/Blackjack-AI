@@ -7,12 +7,14 @@ the computation to a small persistent child process instead (args are
 tuples/frozen dataclasses, results floats/dicts — pickling is trivial), so
 the parent thread just blocks on a future and releases the GIL.
 
-Two single-worker pools: "advice" (per-seat advise + warm-ups,
-latency-sensitive) and "predeal" (the long sweeps) — a sweep must never
-queue a seat's advice behind it. Workers spawn lazily on first use and are
-reused; ev_engine's thread-local memos accumulate across calls inside the
-child exactly as they did on the parent's threads, because a single-worker
-pool runs every job on the same child thread.
+Two pools: "advice" (per-seat advise + warm-ups, latency-sensitive,
+single worker) and "predeal" (the sweeps, constants.PREDEAL_WORKERS
+workers — the sweep fans out one job per dealer up-card via run_many,
+V3 E2) — a sweep must never queue a seat's advice behind it. Workers
+spawn lazily on first use and are reused; ev_engine's thread-local memos
+accumulate across calls inside each child (single-worker pools run every
+job on the same child thread; the predeal workers each keep their own
+caches, warmed by whichever up-card jobs land on them).
 
 On any pool failure (spawn blocked, child killed, interpreter shutdown)
 the call falls back to computing in-process — GIL-noisy but always
@@ -26,6 +28,8 @@ from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from pickle import PicklingError
 
+from ..common import constants
+
 _pools = {}
 _lock = threading.Lock()
 
@@ -34,11 +38,18 @@ def _enabled() -> bool:
     return os.environ.get("BJ_EV_INPROC", "") != "1"
 
 
+def _workers(name) -> int:
+    """Worker count for a named pool — read at pool creation time."""
+    if name == "predeal":
+        return max(1, int(getattr(constants, "PREDEAL_WORKERS", 1)))
+    return 1
+
+
 def _pool(name):
     with _lock:
         pool = _pools.get(name)
         if pool is None:
-            pool = ProcessPoolExecutor(max_workers=1)
+            pool = ProcessPoolExecutor(max_workers=_workers(name))
             _pools[name] = pool
         return pool
 
@@ -81,6 +92,35 @@ def run(name, fn, *args):
         # (test mocks, closures) — compute in-process instead. A TypeError
         # raised by fn itself just gets re-raised from the in-process run.
         return fn(*args)
+
+
+def run_many(name, fn, args_list):
+    """[fn(*args) for args in args_list], fanned across the named pool's
+    workers concurrently; falls back to sequential in-process computation
+    on any pool failure (same contract as run()). fn must be module-level
+    and every args tuple picklable."""
+    args_list = list(args_list)
+    if not _enabled() or not args_list:
+        return [fn(*args) for args in args_list]
+    try:
+        futures = [_pool(name).submit(fn, *args) for args in args_list]
+    except BrokenProcessPool as e:
+        _discard(name)
+        print(f"EV offload worker '{name}' died ({e}); computing in-process.")
+        return [fn(*args) for args in args_list]
+    except (RuntimeError, OSError) as e:
+        print(f"EV offload pool '{name}' unavailable ({e}); computing in-process.")
+        return [fn(*args) for args in args_list]
+    try:
+        return [future.result() for future in futures]
+    except BrokenProcessPool as e:
+        _discard(name)
+        print(f"EV offload worker '{name}' died ({e}); computing in-process.")
+        return [fn(*args) for args in args_list]
+    except (PicklingError, AttributeError, TypeError):
+        # Something couldn't cross the process boundary (test mocks,
+        # closures) — compute everything in-process instead.
+        return [fn(*args) for args in args_list]
 
 
 def prewarm(*names):

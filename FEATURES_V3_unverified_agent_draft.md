@@ -375,7 +375,23 @@ nothing permanently, and local ONNX (≈3× CPU, no network) is the stated
 prerequisite for multi-table (Feature 3) and tightens the phase loop
 (Feature 1). **Effort:** ~2–3 days plumbing + training time.
 
-## E2. Fit the exact pre-deal sweep inside the betting window
+## E2. ✅ Fit the exact pre-deal sweep inside the betting window — COMPLETED
+
+**Status: DONE (measured: ~14 s → ~9–10 s; inside the 12–15 s window).**
+The sweep now fans weight-balanced whole-up-card jobs across a sized
+"predeal" process pool (`PREDEAL_WORKERS` = cores/2 capped at 6;
+`ev_offload.run_many` with run()'s full fallback contract;
+`predeal_ev_upcards` partials sum exactly to `predeal_ev`, hand-slice
+partition supported and tested). **Two of this entry's premises were
+falsified empirically and are documented in the code:** (1) persisting the
+dealer cache across rounds buys nothing — deep dealer states key on the
+exact composition and essentially never recur once any card leaves the shoe
+(14.2 s warm vs 14.1 s cold, +860k new entries/round); (2) incremental
+per-up-card refresh is void — every up-card's distribution moves whenever
+any card is dealt. Hand-slicing below up-card granularity duplicates each
+slice's dealer-tree build and inverts its gains mid-shoe (kept available
+behind `predeal_jobs(grain=)`). The honest next tier for <5 s remains the
+documented mypyc build (V2 F9).
 
 **Enhances:** V2 F3 (exact pre-deal EV) + V2 F9 / V3.2 (`ev_offload`).
 

@@ -138,6 +138,17 @@ SNAPSHOT_POLL_MS = 120
 # book play ("{book} (book — EV delayed)") until the exact result lands.
 EV_ADVICE_TIMEOUT_S = 3.0
 
+# Workers in the "predeal" EV pool (V3 E2): the exact pre-deal sweep fans
+# out weight-balanced whole-up-card jobs, cutting the ~14 s sweep to
+# ~9-10 s so the exact bet call lands inside the 12-15 s betting window
+# instead of one round late. Six is enough: the LPT makespan floors at
+# the heaviest single up-card, and each worker holds its own memo caches
+# (low hundreds of MB at the fresh-shoe peak). Measured (16-thread box):
+# warm caches do NOT help the next round (states key on the exact
+# composition), so parallelism is the only honest lever; the documented
+# next tier is mypyc (V2 F9).
+PREDEAL_WORKERS = max(1, min(6, (os.cpu_count() or 8) // 2))
+
 # ---------------------------------------------------------------------------
 # Game rules
 # ---------------------------------------------------------------------------

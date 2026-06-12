@@ -432,6 +432,113 @@ def _action_evs(ev: "_Evaluator", hand: tuple, comp: tuple, rules: Rules,
     return evs, p_bj
 
 
+#: Measured cold cost per up-card (fresh 8-deck sweep, seconds) — only the
+#: RATIOS matter; they drive the engine's slice balancing for the parallel
+#: sweep. Low up-cards are the deep dealer trees.
+PREDEAL_UPCARD_WEIGHTS = {0: 5.6, 1: 8.5, 2: 6.7, 3: 5.3, 4: 4.2,
+                          5: 3.2, 6: 2.5, 7: 2.1, 8: 1.6, 9: 1.2}
+
+
+def _predeal_upcard_ev(comp: tuple, rules: Rules, u: int, n: int,
+                       slice_of=None) -> float:
+    """One up-card's contribution to the pre-deal sweep: P(up-card) x the
+    EV of the 55 unordered starting hands solved without replacement.
+    slice_of=(j, m) keeps only hand pairs whose fixed enumeration index is
+    congruent to j mod m — a deterministic partition, so the m slices sum
+    exactly to the whole."""
+    if not comp[u]:
+        return 0.0
+    p_u = comp[u] / n
+    comp_u = _minus(comp, u)
+    n1 = sum(comp_u)
+    pair_div = n1 * (n1 - 1)
+    completer = TEN if u == ACE else (ACE if u == TEN else None)
+    # ONE evaluator per up-card: the hands of this slice share its
+    # player-tree memo (slices of the same up-card in other workers
+    # rebuild some of it — the price of the parallel sweep).
+    ev = _Evaluator(u, rules)
+    total_ev = 0.0
+    hand_i = -1
+    for c1 in range(10):
+        for c2 in range(c1, 10):
+            hand_i += 1  # fixed enumeration: independent of comp emptiness
+            if slice_of is not None and hand_i % slice_of[1] != slice_of[0]:
+                continue
+            if not comp_u[c1]:
+                continue
+            if c1 == c2:
+                weight = comp_u[c1] * (comp_u[c1] - 1) / pair_div
+            else:
+                if not comp_u[c2]:
+                    continue
+                weight = 2.0 * comp_u[c1] * comp_u[c2] / pair_div
+            if weight <= 0:
+                continue
+            comp_rest = _minus(_minus(comp_u, c1), c2)
+            n_rest = sum(comp_rest)
+            p_bj = (comp_rest[completer] / n_rest
+                    if completer is not None and n_rest else 0.0)
+            total, _ = hand_state((c1, c2))
+            if total == 21:  # natural: paid bj_pays unless dealer also has one
+                ev_hand = (1.0 - p_bj) * rules.bj_pays
+            else:
+                evs, _ = _action_evs(ev, (c1, c2), comp_rest, rules)
+                ev_hand = max(evs.values())
+                if rules.peek and p_bj:
+                    # _action_evs is conditional on no dealer BJ for peek.
+                    ev_hand = p_bj * -1.0 + (1.0 - p_bj) * ev_hand
+            total_ev += p_u * weight * ev_hand
+    return total_ev
+
+
+def predeal_ev_upcards(comp: tuple, rules: Rules, upcards: tuple,
+                       slice_of=None) -> float:
+    """Partial pre-deal sweep: the given dealer up-cards, optionally only
+    the slice_of=(j, m) hand slice of each — predeal_ev == the sum over
+    all ten up-cards (and over the m slices). This is the unit the engine
+    fans across the predeal process pool (V3 E2).
+
+    Measured reality worth recording: warm caches do NOT speed up the
+    next round's sweep (deep dealer states key on the exact composition
+    and essentially never recur once any card leaves the shoe — 14.2 s
+    warm vs 14.1 s cold), so the only lever is genuine parallelism, and
+    slicing pays a sharing-loss overhead the worker count must beat."""
+    n = sum(comp)
+    if n < 20:
+        return 0.0
+    dealer_cache, player_memo = _thread_caches()
+    if len(dealer_cache) > _DEALER_CACHE_LIMIT:
+        dealer_cache.clear()
+    if len(player_memo) > _PLAYER_MEMO_LIMIT:
+        player_memo.clear()
+    return sum(_predeal_upcard_ev(comp, rules, u, n, slice_of)
+               for u in upcards)
+
+
+def predeal_jobs(comp: tuple, workers: int, grain: float = 9.0) -> list:
+    """Balanced (upcards, slice_of) job list for the parallel sweep,
+    emitted heaviest first so the pool packs them LPT-style; workers <= 1
+    returns the single monolithic job.
+
+    The default grain (9.0 > every weight) keeps up-cards whole: measured
+    on the 16-thread dev box, hand-slicing (grain 3.0) duplicated each
+    slice's dealer-tree build and its fresh-sweep win (8.7 vs 9.5 s)
+    inverted on mid-shoe rounds (10-11 vs 9-10 s) while burning ~1.5x the
+    CPU — the sweep is throughput-bound, not granularity-bound. Whole
+    up-cards floor at the heaviest single evaluation (~8.5 s cold)."""
+    present = [u for u in range(10) if comp[u]]
+    if workers <= 1 or len(present) <= 1:
+        return [(tuple(present), None)]
+    jobs = []
+    for u in present:
+        w = PREDEAL_UPCARD_WEIGHTS.get(u, 3.0)
+        m = max(1, round(w / grain))
+        jobs += [((u,), (j, m) if m > 1 else None, w / m)
+                 for j in range(m)]
+    jobs.sort(key=lambda job: -job[2])
+    return [(upcards, slice_of) for upcards, slice_of, _ in jobs]
+
+
 @lru_cache(maxsize=32)
 def predeal_ev(comp: tuple, rules: Rules) -> float:
     """Exact EV of the NEXT round played optimally, per unit bet, from the
@@ -443,7 +550,10 @@ def predeal_ev(comp: tuple, rules: Rules) -> float:
     dealer-BJ branch (player loses 1, naturals push) is mixed back in here;
     ENHC results already include it. This is the honest replacement for the
     linear true-count edge model — it sees ten/ace density and shoe depth
-    that a single scalar count cannot."""
+    that a single scalar count cannot.
+
+    The monolithic form (kept for tests/in-process callers); the live
+    engine fans predeal_ev_upcards across the predeal pool instead."""
     n = sum(comp)
     if n < 20:
         return 0.0
@@ -452,45 +562,9 @@ def predeal_ev(comp: tuple, rules: Rules) -> float:
         dealer_cache.clear()
     if len(player_memo) > _PLAYER_MEMO_LIMIT:
         player_memo.clear()
-    total_ev = 0.0
-    for u in range(10):
-        if not comp[u]:
-            continue
-        p_u = comp[u] / n
-        comp_u = _minus(comp, u)
-        n1 = sum(comp_u)
-        pair_div = n1 * (n1 - 1)
-        completer = TEN if u == ACE else (ACE if u == TEN else None)
-        # ONE evaluator per up-card: all 55 hands share its player-tree memo.
-        ev = _Evaluator(u, rules)
-        for c1 in range(10):
-            if not comp_u[c1]:
-                continue
-            for c2 in range(c1, 10):
-                if c1 == c2:
-                    weight = comp_u[c1] * (comp_u[c1] - 1) / pair_div
-                else:
-                    if not comp_u[c2]:
-                        continue
-                    weight = 2.0 * comp_u[c1] * comp_u[c2] / pair_div
-                if weight <= 0:
-                    continue
-                comp_rest = _minus(_minus(comp_u, c1), c2)
-                n_rest = sum(comp_rest)
-                p_bj = (comp_rest[completer] / n_rest
-                        if completer is not None and n_rest else 0.0)
-                total, _ = hand_state((c1, c2))
-                if total == 21:  # natural: paid bj_pays unless dealer also has one
-                    ev_hand = (1.0 - p_bj) * rules.bj_pays
-                else:
-                    evs, _ = _action_evs(ev, (c1, c2), comp_rest, rules)
-                    ev_hand = max(evs.values())
-                    if rules.peek and p_bj:
-                        # _action_evs is conditional on no dealer BJ for peek.
-                        ev_hand = p_bj * -1.0 + (1.0 - p_bj) * ev_hand
-                total_ev += p_u * weight * ev_hand
+    total_ev = sum(_predeal_upcard_ev(comp, rules, u, n) for u in range(10))
     if len(dealer_cache) > _DEALER_CACHE_LIMIT:
-        dealer_cache.clear()  # the sweep inflates it well past the limit
+        dealer_cache.clear()  # the full sweep inflates it well past the limit
     if len(player_memo) > _PLAYER_MEMO_LIMIT:
         player_memo.clear()
     return total_ev
